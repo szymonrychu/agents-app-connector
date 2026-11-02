@@ -56,3 +56,13 @@ def test_csv_cidrs_parsed(monkeypatch):
 def test_long_edge_bounds(monkeypatch):
     monkeypatch.setenv("APPCONN_MAX_LONG_EDGE_PX", "100")
     assert "APPCONN_MAX_LONG_EDGE_PX" in problems()
+
+
+def test_png_cap_bounded(monkeypatch):
+    monkeypatch.setenv("APPCONN_MAX_PNG_BYTES", "6291457")
+    assert "APPCONN_MAX_PNG_BYTES" in problems()
+
+
+def test_png_plus_strokes_bounded(monkeypatch):
+    monkeypatch.setenv("APPCONN_MAX_STROKES_BYTES", "2097153")
+    assert "APPCONN_MAX_STROKES_BYTES" in problems()

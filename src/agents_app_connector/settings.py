@@ -50,6 +50,15 @@ class Settings(BaseServiceSettings):
         return value
 
     @model_validator(mode="after")
+    def _attachment_caps(self):
+        # The orchestrator caps one attachment at 6 MiB and all attachments of a message at 8 MiB.
+        if self.max_png_bytes > 6291456:
+            raise ValueError("APPCONN_MAX_PNG_BYTES::must be at most 6291456")
+        if self.max_png_bytes + self.max_strokes_bytes > 8388608:
+            raise ValueError("APPCONN_MAX_STROKES_BYTES::png plus strokes must be at most 8388608")
+        return self
+
+    @model_validator(mode="after")
     def _device_port_differs(self):
         if self.device_port == self.http_port:
             raise ValueError("APPCONN_DEVICE_PORT::must differ from APPCONN_HTTP_PORT")

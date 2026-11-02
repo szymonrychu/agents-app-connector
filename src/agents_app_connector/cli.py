@@ -5,6 +5,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from agents_common.db.migrate import run_migrations
 from agents_common.db.pool import open_pool
@@ -15,8 +16,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agents_app_connector import __version__
 from agents_app_connector.api.admin import create_admin_app
+from agents_app_connector.clock import utcnow
+from agents_app_connector.retention import PurgeResult, purge
 from agents_app_connector.serve import serve_asgi
 from agents_app_connector.settings import Settings
+from agents_app_connector.storage import AttachmentStore
 
 EXIT_BAD_SETTINGS = 78
 
@@ -71,7 +75,21 @@ def _cmd_app(settings: Settings) -> int:
 
 
 def _cmd_purge(settings: Settings) -> int:
-    raise NotImplementedError("purge: Task 13")
+    async def main() -> PurgeResult:
+        pool = await open_pool(settings.database_url.get_secret_value())
+        try:
+            return await purge(
+                pool,
+                AttachmentStore(Path(settings.data_dir)),
+                utcnow(),
+                retention_days=settings.retention_days,
+            )
+        finally:
+            await pool.close()
+
+    result = asyncio.run(main())
+    print(f"purged files={result.files} bytes={result.bytes}")
+    return 0
 
 
 COMMANDS: dict[str, tuple[Callable, Callable]] = {

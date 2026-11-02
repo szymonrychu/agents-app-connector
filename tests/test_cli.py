@@ -44,3 +44,12 @@ def test_bad_settings_exit_78(monkeypatch, capsys, command):
 def test_migrate_settings_needs_only_database_url(monkeypatch):
     monkeypatch.setenv("APPCONN_DATABASE_URL", "postgresql://u:p@db/x")
     assert MigrateSettings().database_url.get_secret_value() == "postgresql://u:p@db/x"
+
+
+def test_purge_runs_one_pass_and_prints_counts(monkeypatch, capsys, url, tmp_path):
+    monkeypatch.setenv("APPCONN_DATABASE_URL", url)
+    monkeypatch.setenv("APPCONN_ORCHESTRATOR_URL", "http://orch")
+    monkeypatch.setenv("APPCONN_ORCHESTRATOR_TOKEN", "tok")
+    monkeypatch.setenv("APPCONN_DATA_DIR", str(tmp_path))
+    assert main(["purge"]) == 0
+    assert capsys.readouterr().out.strip() == "purged files=0 bytes=0"

@@ -105,6 +105,7 @@ def test_preset_is_read_only_without_network():
         "WebFetch",
         "WebSearch",
         "Task",
+        "Agent",
         "mcp__*",
     ):
         assert tool in perms["deny"]

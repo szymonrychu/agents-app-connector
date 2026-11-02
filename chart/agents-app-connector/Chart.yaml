@@ -1,0 +1,6 @@
+apiVersion: v2
+name: agents-app-connector
+description: Client-plugin connector for user devices (sketch upload, translation and hand-off)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

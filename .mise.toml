@@ -1,6 +1,7 @@
 [tools]
 python = "3.12"
 uv = "0.12.23"
+helm = "4.2.4"
 
 [env]
 UV_PYTHON_DOWNLOADS = "never"

@@ -1,0 +1,10 @@
+postgres:
+  url: postgresql://user:password@db.example.com:5432/app
+orchestrator:
+  url: http://orchestrator.example.com
+  token: lint-token
+ingress:
+  device:
+    enabled: true
+  admin:
+    enabled: true

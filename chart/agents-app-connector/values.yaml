@@ -1,0 +1,115 @@
+image:
+  # Placeholder; the deployment (agents-helmfile) overrides the real repository.
+  repository: registry.example.com/agents-app-connector
+  # Defaults to the chart appVersion; deployments pin a semver X.Y.Z tag.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Postgres is required; there is no in-chart database. Set exactly one of url and existingSecret;
+# existingSecretKey names the key holding the DSN.
+postgres:
+  url: ""
+  existingSecret: ""
+  existingSecretKey: uri
+
+# The orchestrator API is required: url, and exactly one of token and existingSecret.
+orchestrator:
+  url: ""
+  token: ""
+  existingSecret: ""
+  existingSecretKey: token
+
+# Source allowlist of the admin pod (APPCONN_ADMIN_ALLOWED_CIDRS, admin pod only): the direct peer
+# must be inside one of these CIDRs or the admin API answers 403 (probes excepted).
+adminAllowedCidrs:
+  - 127.0.0.1/32
+
+# Extra APPCONN_* settings (limits, retention, handoff presets, ...); keys must start with APPCONN_.
+env: {}
+
+# Sketch files live on a PVC mounted into the app pod only (APPCONN_DATA_DIR=/data).
+# existingClaim uses a claim you manage; the chart then creates none.
+persistence:
+  size: 5Gi
+  storageClass: ""
+  existingClaim: ""
+
+# admin: pairing and device management behind SSO. app: device API, worker, tracker and
+# retention. The app is a singleton: the in-process rate limiter and the advisory-locked worker
+# need exactly one replica, and the PVC is ReadWriteOnce, so it has no replicas value (setting
+# one other than 1 fails rendering) and always uses the Recreate strategy.
+components:
+  admin:
+    replicas: 1
+    port: 8000
+    podAnnotations: {}
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {memory: 384Mi}
+  app:
+    port: 8001
+    podAnnotations: {}
+    resources:
+      requests: {cpu: 50m, memory: 192Mi}
+      limits: {memory: 512Mi}
+
+podLabels: {}
+terminationGracePeriodSeconds: 30
+
+service:
+  type: ClusterIP
+  port: 80
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Two Ingresses, both off by default. device is the public one and routes only the sketch prefix
+# to the app Service; admin routes only /app/admin to the admin Service and is meant to sit
+# behind SSO (put the auth annotations in ingress.admin.annotations). No other path is routed.
+# The chart adds no cert-manager annotation. proxyBodySize must stay above the device body cap
+# (APPCONN_MAX_PNG_BYTES + APPCONN_MAX_STROKES_BYTES + overhead, 8470528 bytes by default).
+ingress:
+  className: ""
+  tls: []
+    # - secretName: chart-example-tls
+    #   hosts:
+    #     - app.example.com
+  # Source CIDRs the device ingress refuses (ingress-nginx denylist annotation when non-empty).
+  denySourceRanges: []
+  device:
+    enabled: false
+    host: app.example.com
+    path: /app/v1/sketch
+    proxyBodySize: 9m
+    limitRps: "5"
+    annotations: {}
+  admin:
+    enabled: false
+    host: app.example.com
+    path: /app/admin
+    annotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

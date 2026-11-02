@@ -123,3 +123,33 @@ def test_strokes_too_large_413():
     with pytest.raises(ApiError) as exc:
         validate_strokes(json.dumps(GOOD).encode(), max_bytes=10)
     assert code(exc) == (413, "too_large")
+
+
+def test_validate_png_leaves_global_warning_state_alone():
+    import warnings
+
+    before = list(warnings.filters)
+    validate_png(png(300, 300), **KW)
+    with pytest.raises(ApiError):
+        validate_png(header_only(9000, 9000), **KW)
+    assert warnings.filters == before
+
+
+def test_validate_png_concurrent_threads_keep_warning_state():
+    import warnings
+    from concurrent.futures import ThreadPoolExecutor
+
+    before = list(warnings.filters)
+    good = png(300, 300)
+    bomb = header_only(9000, 9000)
+
+    def run(i):
+        if i % 2:
+            with pytest.raises(ApiError):
+                validate_png(bomb, **KW)
+            return True
+        return validate_png(good, **KW) == (300, 300)
+
+    with ThreadPoolExecutor(8) as pool:
+        assert all(pool.map(run, range(64)))
+    assert warnings.filters == before

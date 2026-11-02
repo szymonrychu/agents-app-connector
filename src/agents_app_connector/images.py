@@ -2,7 +2,7 @@
 
 import io
 import json
-import warnings
+import struct
 
 from PIL import Image, UnidentifiedImageError
 
@@ -22,23 +22,26 @@ def validate_png(
         raise ApiError(413, "too_large", f"png exceeds {max_bytes} bytes")
     if not data.startswith(PNG_MAGIC):
         raise ApiError(415, "invalid_png", "not a PNG")
+    # Pixel count is checked from the IHDR chunk before Pillow sees the data, so Pillow never
+    # reaches its own bomb warning and no process-global warning state is touched (this runs in
+    # worker threads).
+    if data[12:16] != b"IHDR" or len(data) < 24:
+        raise ApiError(415, "invalid_png", "PNG header is missing")
+    hdr_w, hdr_h = struct.unpack(">II", data[16:24])
+    if hdr_w * hdr_h > MAX_PIXELS:
+        raise ApiError(415, "invalid_png", "image has too many pixels")
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as probe:
-                probe.verify()
-            with Image.open(io.BytesIO(data)) as img:
-                if img.format != "PNG":
-                    raise ApiError(415, "invalid_png", "not a PNG")
-                width, height = img.size
-                if width * height > MAX_PIXELS:
-                    raise ApiError(415, "invalid_png", "image has too many pixels")
-                img.load()
+        with Image.open(io.BytesIO(data)) as probe:
+            probe.verify()
+        with Image.open(io.BytesIO(data)) as img:
+            if img.format != "PNG":
+                raise ApiError(415, "invalid_png", "not a PNG")
+            width, height = img.size
+            img.load()
     except ApiError:
         raise
     except (
         Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
         UnidentifiedImageError,
         OSError,
         SyntaxError,

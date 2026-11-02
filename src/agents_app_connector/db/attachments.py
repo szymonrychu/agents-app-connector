@@ -117,3 +117,14 @@ async def mark_purged(conn: psycopg.AsyncConnection, attachment_id: uuid.UUID) -
         (attachment_id,),
     )
     return cur.rowcount == 1
+
+
+async def delete_for_conversation(
+    conn: psycopg.AsyncConnection, conversation_id: uuid.UUID
+) -> list[str]:
+    """Delete the attachment rows of a conversation; return the stored paths to remove."""
+    cur = await conn.execute(
+        "DELETE FROM attachments WHERE conversation_id = %s RETURNING path, purged_at",
+        (conversation_id,),
+    )
+    return [path for path, purged_at in await cur.fetchall() if purged_at is None]

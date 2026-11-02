@@ -311,3 +311,13 @@ async def test_dispatch_to_missing_preset_id_fails_row(worker, fake, upload, pre
     # preset list is read per tick, so the preset is "missing" and rows fail no_preset
     await worker.tick()
     assert await rows(conn, "SELECT status, reason FROM inbound") == [("failed", "no_preset")]
+
+
+async def test_failing_handoff_tick_keeps_dispatching(worker, fake, upload, monkeypatch):
+    async def boom():
+        raise RuntimeError("poison hand-off")
+
+    monkeypatch.setattr(worker._handoffs, "tick", boom)
+    await upload(caption="login")
+    await worker.tick()
+    assert len(fake.messages) == 1

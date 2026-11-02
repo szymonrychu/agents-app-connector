@@ -95,7 +95,10 @@ class Worker:
         self._handoffs = Handoffs(orchestrator, pool)
 
     async def tick(self) -> None:
-        await self._handoffs.tick()
+        try:
+            await self._handoffs.tick()
+        except Exception:
+            log.exception("hand-off tick failed, sketch dispatch continues")
         async with self._pool.connection() as conn:
             unposted = [
                 r

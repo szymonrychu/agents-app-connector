@@ -8,6 +8,7 @@ Shared by the dispatch worker and the reply tracker.
 
 import logging
 
+import psycopg
 from agents_common import runs as agent_runs
 from psycopg_pool import AsyncConnectionPool
 
@@ -16,6 +17,9 @@ from agents_app_connector.db import bindings, events, inbound, runs
 log = logging.getLogger(__name__)
 
 RUN_FAILED = "run_failed"
+SESSION_GONE = "session_gone"
+# agents_common.runs.track reasons that mean the session of a follow run is gone.
+_GONE_REASONS = frozenset({"session_not_found", "message_cancelled"})
 
 
 def status_event(row: inbound.InboundRow, status: str, **extra) -> tuple[str, dict]:
@@ -43,10 +47,16 @@ class AppRunStore:
         self, run_id: agent_runs.RunId, status: agent_runs.RunStatus, reason: str | None
     ) -> bool:
         async with self._pool.connection() as conn, conn.transaction():
+            run = await runs.get(conn, int(run_id))
+            gone = status == "failed" and reason in _GONE_REASONS and run and run.kind == "follow"
+            if gone:
+                reason = SESSION_GONE
             if not await runs.finish(conn, int(run_id), status, reason):
                 return False
             row = await inbound.by_run(conn, int(run_id))
-            if row is not None:
+            if gone:
+                await self._session_gone(conn, run, row)
+            elif row is not None:
                 await inbound.finish(conn, int(run_id), status, reason)
                 if status == "failed":
                     type_, payload = status_event(row, "failed", reason=reason)
@@ -56,3 +66,17 @@ class AppRunStore:
         if released:
             log.info("run %s ended without a session: reservation released", run_id)
         return True
+
+    @staticmethod
+    async def _session_gone(
+        conn: psycopg.AsyncConnection, run: runs.RunRow, row: inbound.InboundRow | None
+    ) -> None:
+        """A follow run whose session is gone: the row returns to the queue and the binding is
+        released, so the worker starts a fresh session with the latest spec."""
+        await inbound.requeue(conn, run.id)
+        binding = await bindings.active(conn, run.conversation_id)
+        if binding is not None:
+            await bindings.release(conn, binding.id, SESSION_GONE)
+        if row is not None:
+            type_, payload = status_event(row, "queued", reason=SESSION_GONE)
+            await events.append(conn, run.conversation_id, type_, payload)

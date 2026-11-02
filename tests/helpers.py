@@ -55,3 +55,13 @@ async def post(api, token, m=None, fl=None):
 
 async def count(conn, table):
     return (await (await conn.execute(f"SELECT count(*) FROM {table}")).fetchone())[0]
+
+
+def only(values):
+    values = list(values)
+    assert len(values) == 1
+    return values[0]
+
+
+async def rows(conn, sql, *params):
+    return await (await conn.execute(sql, params)).fetchall()

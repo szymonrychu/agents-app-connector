@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import bearer, files, meta, png, post
+from helpers import meta, only, png, post, rows
 
 from agents_app_connector.db import bindings, conversations, inbound
 from agents_app_connector.run_store import AppRunStore
@@ -12,53 +12,8 @@ PNG = png()
 
 
 @pytest.fixture
-def preset(fake):
-    return fake.add_preset("sketch-translator")
-
-
-@pytest.fixture
 def worker(orchestrator, pool, settings, store, preset):
     return Worker(orchestrator, pool, settings, store)
-
-
-@pytest.fixture
-def upload(device_api, token):
-    async def go(conv="current", png_bytes=PNG, caption=None):
-        extra = {} if caption is None else {"caption": caption}
-        resp = await post(
-            device_api, token, meta(conversation=conv, **extra), files(png_bytes, with_strokes=True)
-        )
-        assert resp.status_code == 202, resp.text
-        body = resp.json()
-        return body["sketch_id"], body["conversation_id"]
-
-    return go
-
-
-@pytest.fixture
-def say(device_api, token):
-    async def go(conv, text):
-        import uuid
-
-        resp = await device_api.post(
-            f"/conversations/{conv}/messages",
-            json={"client_id": str(uuid.uuid4()), "text": text},
-            headers=bearer(token),
-        )
-        assert resp.status_code == 202, resp.text
-        return resp.json()["message_id"]
-
-    return go
-
-
-def only(values):
-    values = list(values)
-    assert len(values) == 1
-    return values[0]
-
-
-async def rows(conn, sql, *params):
-    return await (await conn.execute(sql, params)).fetchall()
 
 
 async def finish_all(pool):

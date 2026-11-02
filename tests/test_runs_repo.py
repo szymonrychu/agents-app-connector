@@ -64,7 +64,8 @@ async def test_events_after_and_specs_latest(conn):
         "INSERT INTO specs (conversation_id, version, markdown) VALUES (%s, 1, 'a'), (%s, 2, 'b')",
         (cid, cid),
     )
-    assert await specs.latest(conn, cid) == (2, "b")
+    latest = await specs.latest(conn, cid)
+    assert (latest.version, latest.markdown) == (2, "b")
 
 
 async def test_run_store_finish_without_session_releases_reservation(pool, conn):

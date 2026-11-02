@@ -189,3 +189,13 @@ async def fail_queued_rows(
                 await cur.execute(f"SELECT {COLUMNS} FROM inbound WHERE id = %s", (row_id,))
                 failed.append(await cur.fetchone())
     return failed
+
+
+async def sketch_ids_upto(conn: psycopg.AsyncConnection, row: InboundRow) -> list[uuid.UUID]:
+    """Ids of the conversation's sketch rows up to and including `row`, oldest first."""
+    cur = await conn.execute(
+        "SELECT id FROM inbound WHERE conversation_id = %s AND kind = 'sketch' "
+        "AND (created_at, id) <= (%s, %s) ORDER BY created_at, id",
+        (row.conversation_id, row.created_at, row.id),
+    )
+    return [r[0] for r in await cur.fetchall()]

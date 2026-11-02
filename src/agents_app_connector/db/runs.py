@@ -125,6 +125,12 @@ async def in_progress(conn: psycopg.AsyncConnection) -> list[RunRow]:
         return await cur.fetchall()
 
 
+async def get(conn: psycopg.AsyncConnection, run_id: int) -> RunRow | None:
+    async with conn.cursor(row_factory=class_row(RunRow)) as cur:
+        await cur.execute(f"SELECT {COLUMNS} FROM runs WHERE id = %s", (run_id,))
+        return await cur.fetchone()
+
+
 async def count_first_in_progress(conn: psycopg.AsyncConnection) -> int:
     cur = await conn.execute(
         "SELECT count(*) FROM runs WHERE status = 'in-progress' AND kind = 'first'"

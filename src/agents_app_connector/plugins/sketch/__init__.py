@@ -1,6 +1,7 @@
 """Sketch plugin (Boox sketch translator): prompt, attachments and outbound cleanup."""
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,15 +32,28 @@ def _name(kind: str, attachment_id) -> str:
     return f"strokes-{attachment_id}.json"
 
 
+_KEY_LINE = re.compile(r"^[A-Za-z_][\w-]*\s*:")
+
+
+def _front_matter_start(lines: list[str]) -> int | None:
+    """Index of the opening `---` of the front matter: the first `---` followed by a `key:`
+    line (so a prose rule before it is skipped), else the first `---` at all."""
+    rules = [i for i, line in enumerate(lines) if line.strip() == "---"]
+    for i in rules:
+        if i + 1 < len(lines) and _KEY_LINE.match(lines[i + 1]):
+            return i
+    return rules[0] if rules else None
+
+
 def _strip_to_front_matter(text: str) -> str:
     lines = text.strip().splitlines()
-    for i, line in enumerate(lines):
-        if line.strip() == "---":
-            fenced = i > 0 and lines[i - 1].lstrip().startswith("```")
-            lines = lines[i:]
-            if fenced and lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            return "\n".join(lines).strip()
+    start = _front_matter_start(lines)
+    if start is not None:
+        fenced = start > 0 and lines[start - 1].lstrip().startswith("```")
+        lines = lines[start:]
+        if fenced and lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
     if lines and lines[0].lstrip().startswith("```") and lines[-1].strip() == "```":
         lines = lines[1:-1]
     return "\n".join(lines).strip()

@@ -284,7 +284,8 @@ class Worker:
         row = batch.row
         async with self._pool.connection() as conn:
             conv = await conversations.get(conn, row.conversation_id)
-            previous = await specs.latest(conn, row.conversation_id) if first else None
+            spec = await specs.latest(conn, row.conversation_id) if first else None
+            previous = None if spec is None else (spec.version, spec.markdown)
             source = row
             if first and row.kind == "message":
                 source = await inbound.latest_sketch(conn, row.conversation_id) or row

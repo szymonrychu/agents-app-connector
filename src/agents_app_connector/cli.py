@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from agents_app_connector import __version__
 from agents_app_connector.api.admin import create_admin_app
 from agents_app_connector.clock import utcnow
+from agents_app_connector.process import run_app
 from agents_app_connector.retention import PurgeResult, purge
 from agents_app_connector.serve import serve_asgi
 from agents_app_connector.settings import Settings
@@ -71,7 +72,10 @@ def _cmd_admin(settings: Settings) -> int:
 
 
 def _cmd_app(settings: Settings) -> int:
-    raise NotImplementedError("app: Task 14")
+    async def main(stop: asyncio.Event) -> None:
+        await run_app(settings, stop=stop)
+
+    return asyncio.run(run_service(main, grace_seconds=settings.shutdown_grace_seconds))
 
 
 def _cmd_purge(settings: Settings) -> int:

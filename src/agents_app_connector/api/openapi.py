@@ -1,0 +1,387 @@
+"""Deterministic OpenAPI export: `python -m agents_app_connector.api.openapi > openapi.json`.
+
+The document merges the device app (public, bearer device token) and the admin app (behind SSO
+and a source CIDR allowlist). Every error answers `{"error": <code>, "detail": <text>}` (see
+`errors.py`), so the generated validation-error responses are replaced with that shape and the
+statuses each route really returns. Handlers return plain dicts, so the success bodies are
+declared here.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
+
+from agents_app_connector.api.admin import create_admin_app
+from agents_app_connector.api.device import create_device_app
+from agents_app_connector.plugins import REGISTRY
+from agents_app_connector.settings import Settings
+
+DEVICE = "/app/v1/sketch"
+ADMIN = "/app/admin/v1"
+ERROR_REF = {"$ref": "#/components/schemas/ErrorResponse"}
+UUID = {"type": "string", "format": "uuid"}
+STR = {"type": "string"}
+INT = {"type": "integer"}
+
+ERROR_SCHEMAS: dict[str, Any] = {
+    "ErrorResponse": {
+        "type": "object",
+        "title": "ErrorResponse",
+        "required": ["error", "detail"],
+        "properties": {"error": {"type": "string"}, "detail": {"type": "string"}},
+    },
+}
+
+ERRORS = {
+    401: "missing, unknown, revoked or other-plugin bearer token (unauthorized)",
+    403: "source address is not allowed (forbidden)",
+    404: "no such conversation, attachment or device (not_found, no_spec, unknown_session)",
+    409: "a request with this client_id is in progress (in_progress), or no spec yet (no_spec)",
+    410: "the attachment was purged (purged)",
+    413: "body or part too large, or device quota exceeded (too_large, quota_exceeded)",
+    422: "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)",
+    429: "per-device rate limit; see Retry-After (rate_limited)",
+    502: "the orchestrator answered an error (orchestrator_error)",
+    503: "the orchestrator or the database is unavailable (orchestrator_unavailable, unavailable)",
+}
+
+# (status, description, content type, schema) of the success response; None keeps the generated one.
+OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
+    ("get", "/config"): (
+        "200",
+        "limits the device must respect",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {
+                "max_long_edge_px": INT,
+                "max_png_bytes": INT,
+                "max_strokes_bytes": INT,
+                "api_version": INT,
+            },
+        },
+    ),
+    ("post", "/sketches"): (
+        "202",
+        "queued; 200 with the stored ids on a replay of the same client_id",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {
+                "sketch_id": UUID,
+                "conversation_id": UUID,
+                "status": {"type": "string", "enum": ["queued"]},
+            },
+        },
+    ),
+    ("get", "/conversations"): (
+        "200",
+        "the device's conversations, newest first",
+        "application/json",
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": UUID,
+                    "title": {"type": ["string", "null"]},
+                    "created_at": {"type": "string", "format": "date-time"},
+                    "latest_spec_version": {"type": ["integer", "null"]},
+                },
+            },
+        },
+    ),
+    ("post", "/conversations"): (
+        "201",
+        "a new empty conversation",
+        "application/json",
+        {"type": "object", "properties": {"id": UUID}},
+    ),
+    ("delete", "/conversations/{conversation_id}"): ("204", "deleted", "", {}),
+    ("post", "/conversations/{conversation_id}/messages"): (
+        "202",
+        "queued; 200 on a replay of the same client_id",
+        "application/json",
+        {"type": "object", "properties": {"message_id": UUID}},
+    ),
+    ("get", "/conversations/{conversation_id}/events"): (
+        "200",
+        "events after the cursor (long poll with wait)",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {
+                "events": {"type": "array", "items": {"$ref": "#/components/schemas/Event"}},
+                "cursor": INT,
+            },
+        },
+    ),
+    ("get", "/conversations/{conversation_id}/stream"): (
+        "200",
+        "server-sent events; the SSE id is the cursor, Last-Event-ID resumes",
+        "text/event-stream",
+        {"type": "string"},
+    ),
+    ("get", "/conversations/{conversation_id}/spec"): (
+        "200",
+        "the latest spec",
+        "application/json",
+        {"$ref": "#/components/schemas/Spec"},
+    ),
+    ("get", "/conversations/{conversation_id}/spec.md"): (
+        "200",
+        "the latest spec as markdown",
+        "text/markdown",
+        {"type": "string"},
+    ),
+    ("get", "/conversations/{conversation_id}/spec/{version}"): (
+        "200",
+        "one spec version",
+        "application/json",
+        {"$ref": "#/components/schemas/Spec"},
+    ),
+    ("get", "/attachments/{attachment_id}"): (
+        "200",
+        "the stored file with an ETag; 304 on a matching If-None-Match",
+        "application/octet-stream",
+        {"type": "string", "format": "binary"},
+    ),
+    ("get", "/handoff/targets"): (
+        "200",
+        "active sessions and allowed presets a spec can be handed to",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {
+                "sessions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": STR,
+                            "slug": STR,
+                            "preset_name": {"type": ["string", "null"]},
+                        },
+                    },
+                },
+                "presets": {"type": "array", "items": STR},
+            },
+        },
+    ),
+    ("post", "/conversations/{conversation_id}/handoff"): (
+        "202",
+        "queued; 200 on a replay of the same client_id",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {"handoff_id": UUID, "session_slug": STR},
+        },
+    ),
+}
+
+EXTRA_SCHEMAS: dict[str, Any] = {
+    "Event": {
+        "type": "object",
+        "title": "Event",
+        "description": (
+            "type is sketch_status, spec, message or handoff; the remaining fields depend on "
+            "the type (sketch_id or message_id or handoff_id, status, reason, session_slug)."
+        ),
+        "required": ["cursor", "type", "created_at"],
+        "properties": {
+            "cursor": INT,
+            "type": {"type": "string", "enum": ["sketch_status", "spec", "message", "handoff"]},
+            "created_at": {"type": "string", "format": "date-time"},
+        },
+        "additionalProperties": True,
+    },
+    "Spec": {
+        "type": "object",
+        "title": "Spec",
+        "required": ["version", "markdown", "created", "sketch_ids"],
+        "properties": {
+            "version": INT,
+            "markdown": STR,
+            "created": {"type": "string", "format": "date-time"},
+            "sketch_ids": {"type": "array", "items": UUID},
+        },
+    },
+    "SketchUpload": {
+        "type": "object",
+        "title": "SketchUpload",
+        "required": ["meta", "sketch.png"],
+        "properties": {
+            "meta": {
+                "type": "string",
+                "description": (
+                    'JSON: {"client_id": uuid, "conversation": "current"|"new", "caption"?: '
+                    'string, "canvas": {"w", "h", "dpi"}, "page"?: int}'
+                ),
+            },
+            "sketch.png": {"type": "string", "format": "binary"},
+            "strokes.json": {"type": "string", "format": "binary"},
+        },
+    },
+}
+
+ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
+    ("get", "/config"): (401, 429),
+    ("post", "/sketches"): (401, 409, 413, 422, 429),
+    ("get", "/conversations"): (401, 429),
+    ("post", "/conversations"): (401, 429),
+    ("delete", "/conversations/{conversation_id}"): (401, 404, 429),
+    ("post", "/conversations/{conversation_id}/messages"): (401, 404, 409, 422, 429),
+    ("get", "/conversations/{conversation_id}/events"): (401, 404, 422, 429),
+    ("get", "/conversations/{conversation_id}/stream"): (401, 404, 422, 429),
+    ("get", "/conversations/{conversation_id}/spec"): (401, 404, 429),
+    ("get", "/conversations/{conversation_id}/spec.md"): (401, 404, 429),
+    ("get", "/conversations/{conversation_id}/spec/{version}"): (401, 404, 422, 429),
+    ("get", "/attachments/{attachment_id}"): (401, 404, 410, 429),
+    ("get", "/handoff/targets"): (401, 429, 502, 503),
+    ("post", "/conversations/{conversation_id}/handoff"): (
+        401,
+        404,
+        409,
+        422,
+        429,
+        502,
+        503,
+    ),
+    ("post", "/devices"): (403, 422),
+    ("get", "/devices"): (403,),
+    ("delete", "/devices/{device_id}"): (403, 404, 422),
+    ("get", "/readyz"): (503,),
+}
+
+SUMMARIES = {
+    "/config": "Limits and API version",
+    "/sketches": "Upload a sketch (multipart: meta, sketch.png, optional strokes.json)",
+    "/conversations": "List or create conversations",
+    "/conversations/{conversation_id}": "Delete a conversation",
+    "/conversations/{conversation_id}/messages": "Post a follow-up message",
+    "/conversations/{conversation_id}/events": "Poll events after a cursor",
+    "/conversations/{conversation_id}/stream": "Stream events over SSE",
+    "/conversations/{conversation_id}/spec": "Latest spec as JSON",
+    "/conversations/{conversation_id}/spec.md": "Latest spec as markdown",
+    "/conversations/{conversation_id}/spec/{version}": "One spec version",
+    "/attachments/{attachment_id}": "Download a stored sketch file",
+    "/handoff/targets": "Sessions and presets a spec can be handed to",
+    "/conversations/{conversation_id}/handoff": "Hand the latest spec to a session",
+    "/devices": "Pair or list devices",
+    "/devices/{device_id}": "Revoke a device",
+}
+
+
+def _settings() -> Settings:
+    return Settings(
+        database_url="postgresql://openapi/export",
+        orchestrator_url="http://orchestrator.invalid",
+        orchestrator_token="openapi-export",
+    )
+
+
+def _apps() -> list[FastAPI]:
+    settings = _settings()
+    device = create_device_app(None, settings, list(REGISTRY.values()), None)  # type: ignore[arg-type]
+    admin = create_admin_app(None, settings)  # type: ignore[arg-type]
+    return [device, admin]
+
+
+def _walk(router, prefix: str = ""):
+    for route in router.routes:
+        if isinstance(route, APIRoute):
+            yield prefix + route.path, route.methods
+        elif hasattr(route, "original_router"):
+            yield from _walk(route.original_router, prefix + route.include_context.prefix)
+
+
+def route_keys() -> set[str]:
+    """`METHOD path` of every documented route of both apps (HEAD left out)."""
+    out: set[str] = set()
+    for app in _apps():
+        for path, methods in _walk(app):
+            out.update(f"{m} {path}" for m in methods - {"HEAD"})
+    return out
+
+
+def paths_of(doc: dict[str, Any]) -> set[str]:
+    return {f"{m.upper()} {p}" for p, ops in doc["paths"].items() for m in ops}
+
+
+def _local(path: str) -> str:
+    for prefix in (DEVICE, ADMIN):
+        if path.startswith(prefix):
+            return path.removeprefix(prefix) or "/"
+    return path
+
+
+def build_openapi() -> dict[str, Any]:
+    device, admin = (app.openapi() for app in _apps())
+    paths: dict[str, Any] = {**admin["paths"], **device["paths"]}
+    schemas: dict[str, Any] = {**admin["components"]["schemas"], **device["components"]["schemas"]}
+    for path, methods in paths.items():
+        local = _local(path)
+        for method, operation in methods.items():
+            responses = operation["responses"]
+            ok = OK.get((method, local))
+            if ok is not None and path.startswith(DEVICE):
+                status, description, ctype, schema = ok
+                for key in [s for s in responses if s.startswith("2")]:
+                    del responses[key]
+                responses[status] = {"description": description}
+                if ctype:
+                    responses[status]["content"] = {ctype: {"schema": schema}}
+            if method == "post" and local == "/sketches":
+                operation["requestBody"] = {
+                    "required": True,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {"$ref": "#/components/schemas/SketchUpload"}
+                        }
+                    },
+                }
+            for status in [s for s in responses if not s.startswith("2")]:
+                del responses[status]
+            for status in ROUTE_ERRORS.get((method, local), ()):
+                responses[str(status)] = {
+                    "description": ERRORS[status],
+                    "content": {"application/json": {"schema": ERROR_REF}},
+                }
+            if path.startswith(DEVICE):
+                operation["security"] = [{"deviceToken": []}]
+            if local in SUMMARIES:
+                operation["summary"] = SUMMARIES[local]
+    for name in ("HTTPValidationError", "ValidationError"):
+        schemas.pop(name, None)
+    schemas.update(ERROR_SCHEMAS)
+    schemas.update(EXTRA_SCHEMAS)
+    doc = {
+        "openapi": device["openapi"],
+        "info": {
+            "title": "agents-app-connector",
+            "version": device["info"]["version"],
+            "description": (
+                f"Device API under {DEVICE} (public, bearer device token) and admin API under "
+                f"{ADMIN} (behind SSO and a source CIDR allowlist)."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+            "securitySchemes": {"deviceToken": {"type": "http", "scheme": "bearer"}},
+        },
+    }
+    return doc
+
+
+def export() -> str:
+    """The merged OpenAPI document as JSON with sorted keys and a trailing newline."""
+    return json.dumps(build_openapi(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+if __name__ == "__main__":
+    print(export(), end="")

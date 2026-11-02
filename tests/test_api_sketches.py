@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import uuid
@@ -62,6 +63,15 @@ async def test_in_progress_duplicate_409(device_api, token, conn):
     r = await post(device_api, token, m)
     assert r.status_code == 409 and r.json()["error"] == "in_progress"
     assert await count(conn, "inbound") == 0
+
+
+async def test_concurrent_identical_uploads_one_row(device_api, token, conn):
+    m = meta()
+    results = await asyncio.gather(*[post(device_api, token, m) for _ in range(2)])
+    codes = sorted(r.status_code for r in results)
+    assert codes[0] in (200, 202) and codes[1] in (200, 202, 409)
+    assert 202 in codes
+    assert await count(conn, "inbound") == 1
 
 
 async def test_non_png_415_nothing_stored(device_api, token, conn, store):

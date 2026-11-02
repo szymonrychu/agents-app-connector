@@ -130,18 +130,14 @@ async def finish(
 ) -> int:
     """Settle the in-progress row of a run as handled or failed."""
     n = 0
-    for row_id in await _ids(
-        conn, "run_id = %s AND status = 'in-progress'", (run_id,)
-    ):
+    for row_id in await _ids(conn, "run_id = %s AND status = 'in-progress'", (run_id,)):
         n += await transition(conn, "inbound", row_id, "in-progress", status, reason=reason)
     return n
 
 
 async def requeue(conn: psycopg.AsyncConnection, run_id: int) -> int:
     n = 0
-    for row_id in await _ids(
-        conn, "run_id = %s AND status = 'in-progress'", (run_id,)
-    ):
+    for row_id in await _ids(conn, "run_id = %s AND status = 'in-progress'", (run_id,)):
         n += await transition(conn, "inbound", row_id, "in-progress", "queued", run_id=None)
     return n
 

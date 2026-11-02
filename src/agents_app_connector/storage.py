@@ -1,4 +1,4 @@
-"""Attachment bytes on the PVC directory: <root>/<device_id>/<attachment_id>. Metadata is in the DB."""
+"""Attachment bytes on the PVC: <root>/<device_id>/<attachment_id>. Metadata is in the DB."""
 
 import hashlib
 import os

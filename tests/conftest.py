@@ -63,9 +63,15 @@ def store(tmp_path):
 
 
 @pytest.fixture
-def make_app(pool, settings, store):
+def make_app(pool, settings, store, orchestrator):
     def make(**overrides):
-        return create_device_app(pool, settings.model_copy(update=overrides), [Sketch()], store)
+        return create_device_app(
+            pool,
+            settings.model_copy(update=overrides),
+            [Sketch()],
+            store,
+            orchestrator=orchestrator,
+        )
 
     return make
 

@@ -53,6 +53,7 @@ from agents_app_connector.db import (
     specs,
 )
 from agents_app_connector.db.inbound import InboundRow
+from agents_app_connector.handoff import Handoffs
 from agents_app_connector.plugins import REGISTRY, TurnFile, TurnInput
 from agents_app_connector.plugins.sketch import MISSING_FILE
 from agents_app_connector.run_store import AppRunStore, status_event
@@ -91,8 +92,10 @@ class Worker:
         self._files = store
         self._now = now
         self._runs = AppRunStore(pool)
+        self._handoffs = Handoffs(orchestrator, pool)
 
     async def tick(self) -> None:
+        await self._handoffs.tick()
         async with self._pool.connection() as conn:
             unposted = [
                 r

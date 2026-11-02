@@ -8,7 +8,8 @@ found, timeout) goes to agents_common's `track` with the shared run store, whose
 the row and emits the `failed` event; a follow run whose session is gone is requeued there. An
 empty reply fails the run `empty_reply`. A run of a deleted conversation fails
 `conversation_deleted` with no spec and no events. An unavailable orchestrator leaves the run in
-progress for the next tick. Handoff runs are tracked by the handoff worker.
+progress for the next tick. A handoff run finishes when its message was sent
+(`track_delivery`); a cancelled, failed or missing message fails it `session_gone`.
 """
 
 import logging
@@ -38,6 +39,7 @@ EMPTY_REPLY = "empty_reply"
 CONVERSATION_DELETED = "conversation_deleted"
 INBOUND_MISSING = "inbound_missing"
 TIMEOUT = "timeout"
+SESSION_GONE = "session_gone"
 
 
 class _Fetched:
@@ -73,7 +75,7 @@ class Tracker:
             active = [
                 r
                 for r in await runs.in_progress(conn)
-                if r.message_id is not None and r.kind in TRACKED
+                if r.message_id is not None and r.kind in (*TRACKED, "handoff")
             ]
         for run in active:
             try:
@@ -81,7 +83,22 @@ class Tracker:
             except OrchestratorUnavailable as exc:
                 log.warning("run %s: orchestrator unavailable, retrying next tick: %s", run.id, exc)
 
+    async def _track_handoff(self, run: runs.RunRow) -> None:
+        """A hand-off is done when its message was sent; a lost message fails it."""
+        outcome = await agent_runs.track_delivery(
+            self._orchestrator,
+            self._runs,
+            runs.to_ref(run),
+            timeout_seconds=self._settings.run_timeout_seconds,
+            now=self._now(),
+        )
+        if outcome == "gone":
+            await self._runs.finish(run.id, "failed", SESSION_GONE)
+
     async def _track(self, run: runs.RunRow) -> None:
+        if run.kind == "handoff":
+            await self._track_handoff(run)
+            return
         async with self._pool.connection() as conn:
             conv = await conversations.get(conn, run.conversation_id)
         if conv is None or conv.state == "deleted":

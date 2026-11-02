@@ -55,8 +55,9 @@ async def create(
     preset_id: uuid.UUID | str | None,
     inbound_id: uuid.UUID | None = None,
     handoff_id: uuid.UUID | None = None,
+    slug: str | None = None,
 ) -> RunRef:
-    """Insert an in-progress run with slug `app-<id>`."""
+    """Insert an in-progress run with slug `slug`, `app-<id>` when omitted."""
     cur = await conn.execute(
         "INSERT INTO runs (conversation_id, inbound_id, handoff_id, kind, preset_id) "
         "VALUES (%s, %s, %s, %s, %s::uuid) RETURNING id, started_at",
@@ -69,7 +70,7 @@ async def create(
         ),
     )
     run_id, started_at = await cur.fetchone()
-    slug = f"app-{run_id}"
+    slug = slug or f"app-{run_id}"
     await conn.execute("UPDATE runs SET slug = %s WHERE id = %s", (slug, run_id))
     return RunRef(
         id=run_id,

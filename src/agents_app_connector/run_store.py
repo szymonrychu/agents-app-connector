@@ -12,7 +12,7 @@ import psycopg
 from agents_common import runs as agent_runs
 from psycopg_pool import AsyncConnectionPool
 
-from agents_app_connector.db import bindings, events, inbound, runs
+from agents_app_connector.db import bindings, events, handoffs, inbound, runs
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,16 @@ def status_event(row: inbound.InboundRow, status: str, **extra) -> tuple[str, di
     if row.kind == "sketch":
         return "sketch_status", {"sketch_id": str(row.id), "status": status, **extra}
     return "message", {"message_id": str(row.id), "status": status, **extra}
+
+
+def handoff_event(row: handoffs.HandoffRow, status: str, **extra) -> dict:
+    """The payload of a `handoff` event."""
+    return {
+        "handoff_id": str(row.id),
+        "status": status,
+        "session_slug": row.session_slug,
+        **extra,
+    }
 
 
 class AppRunStore:
@@ -54,7 +64,9 @@ class AppRunStore:
             if not await runs.finish(conn, int(run_id), status, reason):
                 return False
             row = await inbound.by_run(conn, int(run_id))
-            if gone:
+            if run is not None and run.kind == "handoff":
+                await self._settle_handoff(conn, run, status, reason)
+            elif gone:
                 await self._session_gone(conn, run, row)
             elif row is not None:
                 await inbound.finish(conn, int(run_id), status, reason)
@@ -66,6 +78,18 @@ class AppRunStore:
         if released:
             log.info("run %s ended without a session: reservation released", run_id)
         return True
+
+    @staticmethod
+    async def _settle_handoff(
+        conn: psycopg.AsyncConnection, run: runs.RunRow, status: str, reason: str | None
+    ) -> None:
+        """Settle the hand-off of a run and emit its `handoff` event."""
+        done = await handoffs.finish_run(conn, run.id, status, reason)
+        if done is not None:
+            extra = {} if reason is None else {"reason": reason}
+            await events.append(
+                conn, done.conversation_id, "handoff", handoff_event(done, status, **extra)
+            )
 
     @staticmethod
     async def _session_gone(

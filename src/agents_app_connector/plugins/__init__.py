@@ -21,6 +21,7 @@ class PluginDeps:
     store: Any
     limiter: RateLimiter
     hub: EventHub
+    orchestrator: Any = None
 
 
 @dataclass(frozen=True)

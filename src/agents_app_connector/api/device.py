@@ -19,6 +19,7 @@ def create_device_app(
     settings: Settings,
     plugins: Sequence[ClientPlugin],
     store,
+    orchestrator=None,
 ) -> FastAPI:
     limiter = RateLimiter(settings.rate_per_minute)
     hub = EventHub(settings.database_url.get_secret_value(), pool, settings.poll_seconds)
@@ -40,7 +41,14 @@ def create_device_app(
     )
     app.state.pool = pool
     app.state.limiter = limiter
-    deps = PluginDeps(pool=pool, settings=settings, store=store, limiter=limiter, hub=hub)
+    deps = PluginDeps(
+        pool=pool,
+        settings=settings,
+        store=store,
+        limiter=limiter,
+        hub=hub,
+        orchestrator=orchestrator,
+    )
     for plugin in plugins:
         app.include_router(plugin.router(deps), prefix=plugin.prefix)
     app.add_middleware(BodyCap, max_bytes=settings.max_body_bytes)

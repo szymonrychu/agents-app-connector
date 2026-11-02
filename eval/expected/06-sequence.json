@@ -1,0 +1,11 @@
+{
+  "words": [
+    "client",
+    "server",
+    "login",
+    "token",
+    "fetch"
+  ],
+  "diagram": "sequenceDiagram",
+  "min_word_recall": 0.8
+}

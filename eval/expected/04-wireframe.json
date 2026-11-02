@@ -1,0 +1,12 @@
+{
+  "words": [
+    "menu",
+    "home",
+    "users",
+    "settings",
+    "search",
+    "save"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8
+}

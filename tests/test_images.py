@@ -153,3 +153,16 @@ def test_validate_png_concurrent_threads_keep_warning_state():
     with ThreadPoolExecutor(8) as pool:
         assert all(pool.map(run, range(64)))
     assert warnings.filters == before
+
+
+def test_over_long_edge_rejected_from_header_before_decode(monkeypatch):
+    def no_open(*a, **k):
+        raise AssertionError("image must not be opened")
+
+    monkeypatch.setattr(Image, "open", no_open)
+    with pytest.raises(ApiError) as exc:
+        validate_png(header_only(7000, 7000), **KW)
+    assert code(exc) == (422, "bad_dimensions")
+    with pytest.raises(ApiError) as exc:
+        validate_png(header_only(1000, 100), **KW)
+    assert code(exc) == (422, "bad_dimensions")

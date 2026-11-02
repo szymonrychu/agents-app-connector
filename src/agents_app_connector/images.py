@@ -30,6 +30,11 @@ def validate_png(
     hdr_w, hdr_h = struct.unpack(">II", data[16:24])
     if hdr_w * hdr_h > MAX_PIXELS:
         raise ApiError(415, "invalid_png", "image has too many pixels")
+    # Edge limits are checked from the header too, so an oversized image is never decoded.
+    if max(hdr_w, hdr_h) > max_long_edge:
+        raise ApiError(422, "bad_dimensions", f"long edge exceeds {max_long_edge} px")
+    if min(hdr_w, hdr_h) < min_edge:
+        raise ApiError(422, "bad_dimensions", f"short edge below {min_edge} px")
     try:
         with Image.open(io.BytesIO(data)) as probe:
             probe.verify()

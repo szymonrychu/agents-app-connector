@@ -128,3 +128,26 @@ async def test_revoked_during_long_poll_answers_401(live, conn, token, cid):
     r = await live.get(f"/conversations/{cid}/events?wait=10", headers=bearer(token))
     await task
     assert r.status_code == 401 and r.json()["error"] == "unauthorized"
+
+
+async def test_event_writers_of_one_conversation_are_serialised(url, conn, cid):
+    import psycopg
+
+    async with (
+        await psycopg.AsyncConnection.connect(url) as a,
+        await psycopg.AsyncConnection.connect(url) as b,
+    ):
+        first = await events.append(a, cid, "spec", {"n": 1})
+        second = asyncio.create_task(_append_commit(b, cid))
+        await asyncio.sleep(0.5)
+        assert not second.done(), "second writer must wait for the first commit"
+        await a.commit()
+        second_id = await asyncio.wait_for(second, 5)
+    assert second_id > first
+    assert [e.id for e in await events.after(conn, cid, 0)] == [first, second_id]
+
+
+async def _append_commit(conn, cid):
+    event_id = await events.append(conn, cid, "message", {"n": 2})
+    await conn.commit()
+    return event_id

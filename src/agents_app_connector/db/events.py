@@ -15,6 +15,11 @@ CHANNEL = "app_events"
 async def append(
     conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, type_: str, payload: dict
 ) -> int:
+    # Serialise event writers of one conversation until commit, so ids become visible in order
+    # and a cursor reader never skips an event committed later with a lower id.
+    await conn.execute(
+        "SELECT 1 FROM conversations WHERE id = %s FOR NO KEY UPDATE", (conversation_id,)
+    )
     cur = await conn.execute(
         "INSERT INTO events (conversation_id, type, payload) VALUES (%s, %s, %s) RETURNING id",
         (conversation_id, type_, json.dumps(payload)),

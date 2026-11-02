@@ -13,14 +13,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from agents_app_connector.api.errors import ApiError, add_error_handlers, error_response
 from agents_app_connector.api.schemas import DeviceOut, PairRequest, PairResponse
 from agents_app_connector.db import devices
+from agents_app_connector.plugins import PLUGIN_IDS
 from agents_app_connector.settings import Settings
 
 log = logging.getLogger(__name__)
 
 PREFIX = "/app/admin/v1"
 EXEMPT_PATHS = frozenset({"/healthz", "/readyz"})
-# Stub until the plugin registry lands (Task 8); then this becomes the registry keys.
-PLUGIN_IDS = frozenset({"sketch"})
 
 
 class SourceAllowlist:

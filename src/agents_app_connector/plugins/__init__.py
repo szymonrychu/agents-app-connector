@@ -1,10 +1,11 @@
-"""Client plugin interface. The registry arrives with the sketch plugin."""
+"""Client plugin interface and registry."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+from agents_common.orchestrator import Attachment
 from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
 
@@ -47,5 +48,11 @@ class ClientPlugin(Protocol):
 
     def router(self, deps: PluginDeps) -> APIRouter: ...
     def render_prompt(self, turn: TurnInput) -> str: ...
-    def turn_attachments(self, turn: TurnInput) -> list[dict]: ...
+    def turn_attachments(self, turn: TurnInput) -> list[Attachment]: ...
     def outbound(self, final_text: str) -> tuple[str, bool]: ...
+
+
+from agents_app_connector.plugins.sketch import PLUGIN as _SKETCH  # noqa: E402
+
+REGISTRY: dict[str, ClientPlugin] = {_SKETCH.id: _SKETCH}
+PLUGIN_IDS = frozenset(REGISTRY)

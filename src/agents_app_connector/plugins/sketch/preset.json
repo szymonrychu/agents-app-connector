@@ -1,0 +1,19 @@
+{
+  "name": "sketch-translator",
+  "labels": ["sketch"],
+  "superleader_manageable": true,
+  "spec": {
+    "model": "claude-sonnet-5-5",
+    "replicas": 1,
+    "reuse_running_agent": true,
+    "discard_after_idle_seconds": 3600,
+    "peers": false,
+    "wrapper": {
+      "system_append": "@system_append.md",
+      "permissions": {
+        "allow": ["Read", "Glob"],
+        "deny": ["WebFetch", "WebSearch", "Bash(curl *)", "Bash(git *)"]
+      }
+    }
+  }
+}

@@ -1,16 +1,21 @@
 """Command line entrypoint: migrate, admin, app and purge subcommands."""
 
 import argparse
+import asyncio
 import logging
 import sys
 from collections.abc import Callable, Sequence
 
 from agents_common.db.migrate import run_migrations
+from agents_common.db.pool import open_pool
+from agents_common.runtime import run_service
 from agents_common.settings import SettingsError, load_settings
 from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agents_app_connector import __version__
+from agents_app_connector.api.admin import create_admin_app
+from agents_app_connector.serve import serve_asgi
 from agents_app_connector.settings import Settings
 
 EXIT_BAD_SETTINGS = 78
@@ -48,7 +53,17 @@ def _cmd_migrate(settings: MigrateSettings) -> int:
 
 
 def _cmd_admin(settings: Settings) -> int:
-    raise NotImplementedError("admin: Task 4")
+    async def main(stop: asyncio.Event) -> None:
+        pool = await open_pool(settings.database_url.get_secret_value())
+        try:
+            app = create_admin_app(pool, settings)
+            await serve_asgi(
+                app, settings.http_host, settings.http_port, settings.shutdown_grace_seconds, stop
+            )
+        finally:
+            await pool.close()
+
+    return asyncio.run(run_service(main, grace_seconds=settings.shutdown_grace_seconds))
 
 
 def _cmd_app(settings: Settings) -> int:

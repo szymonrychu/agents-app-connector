@@ -9,6 +9,7 @@ from agents_common.orchestrator import Attachment
 from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
 
+from agents_app_connector.api.events import EventHub
 from agents_app_connector.api.limits import RateLimiter
 from agents_app_connector.settings import Settings
 
@@ -19,6 +20,7 @@ class PluginDeps:
     settings: Settings
     store: Any
     limiter: RateLimiter
+    hub: EventHub
 
 
 @dataclass(frozen=True)

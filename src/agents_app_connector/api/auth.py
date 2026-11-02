@@ -21,6 +21,21 @@ def bearer_token(request: Request) -> str | None:
     return token
 
 
+async def active_device(request: Request, plugin_id: str) -> DeviceRow:
+    """The device of the request token if it is still active for this plugin, else 401.
+
+    Long-lived handlers call it again on every loop iteration so a revoked token stops them.
+    """
+    token = bearer_token(request)
+    if token is None:
+        raise _unauthorized()
+    async with request.app.state.pool.connection() as conn:
+        row = await devices.by_token(conn, token)
+    if row is None or row.plugin != plugin_id:
+        raise _unauthorized()
+    return row
+
+
 def device_auth(plugin_id: str) -> Callable[[Request], Awaitable[DeviceRow]]:
     """Dependency: the active device for this plugin, then the per-device rate limit.
 
@@ -28,13 +43,7 @@ def device_auth(plugin_id: str) -> Callable[[Request], Awaitable[DeviceRow]]:
     """
 
     async def dependency(request: Request) -> DeviceRow:
-        token = bearer_token(request)
-        if token is None:
-            raise _unauthorized()
-        async with request.app.state.pool.connection() as conn:
-            row = await devices.by_token(conn, token)
-        if row is None or row.plugin != plugin_id:
-            raise _unauthorized()
+        row = await active_device(request, plugin_id)
         limiter = request.app.state.limiter
         key = str(row.id)
         if not limiter.allow(key):

@@ -3,17 +3,19 @@
 import asyncio
 import hashlib
 import uuid
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Annotated
 
 import psycopg
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from agents_app_connector import clock
-from agents_app_connector.api.auth import device_auth
+from agents_app_connector.api.auth import active_device, device_auth
 from agents_app_connector.api.errors import ApiError
 from agents_app_connector.api.schemas import MessageIn, SketchMeta
 from agents_app_connector.db import attachments, conversations, events, inbound, specs
@@ -69,6 +71,15 @@ async def _read_part(part: object, name: str, cap: int) -> bytes:
     if len(data) > cap:
         raise ApiError(413, "too_large", f"{name} exceeds {cap} bytes")
     return data
+
+
+def _event_json(row: events.EventRow) -> dict:
+    return {
+        "cursor": row.id,
+        "type": row.type,
+        **row.payload,
+        "created_at": row.created_at.isoformat(),
+    }
 
 
 def build_router(deps: PluginDeps) -> APIRouter:
@@ -263,5 +274,110 @@ def build_router(deps: PluginDeps) -> APIRouter:
                 {"message_id": str(message_id), "status": "queued"},
             )
         return JSONResponse({"message_id": str(message_id)}, status_code=202)
+
+    async def owned(conversation_id: uuid.UUID, device: Device) -> uuid.UUID:
+        async with pool.connection() as conn:
+            if await conversations.get_owned(conn, conversation_id, device.id) is None:
+                raise ApiError(404, "not_found", "conversation not found")
+        return conversation_id
+
+    Conversation = Annotated[uuid.UUID, Depends(owned)]  # noqa: N806
+
+    async def events_after(conversation_id: uuid.UUID, cursor: int) -> list[events.EventRow]:
+        async with pool.connection() as conn:
+            return await events.after(conn, conversation_id, cursor)
+
+    @router.get("/conversations/{conversation_id}/events")
+    async def poll_events(
+        request: Request,
+        conversation_id: Conversation,
+        after: Annotated[int, Query(ge=0)] = 0,
+        wait: Annotated[int, Query(ge=0, le=settings.events_wait_max_seconds)] = 0,
+    ) -> dict:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait
+        while True:
+            rows = await events_after(conversation_id, after)
+            remaining = deadline - loop.time()
+            if rows or remaining <= 0:
+                break
+            await deps.hub.wait_for(conversation_id, min(remaining, settings.poll_seconds))
+            await active_device(request, PLUGIN_ID)  # revoked while waiting: 401
+        await active_device(request, PLUGIN_ID)
+        return {"events": [_event_json(r) for r in rows], "cursor": rows[-1].id if rows else after}
+
+    @router.get("/conversations/{conversation_id}/stream", response_class=EventSourceResponse)
+    async def stream_events(
+        request: Request,
+        conversation_id: Conversation,
+        after: Annotated[int, Query(ge=0)] = 0,
+    ) -> AsyncIterator[ServerSentEvent]:
+        cursor = after
+        last_id = request.headers.get("last-event-id", "")
+        if last_id.isdigit():
+            cursor = int(last_id)
+        while True:
+            try:
+                await active_device(request, PLUGIN_ID)
+            except ApiError:
+                return  # revoked: the client sees 401 on reconnect
+            rows = await events_after(conversation_id, cursor)
+            for row in rows:
+                yield ServerSentEvent(data=_event_json(row), event=row.type, id=str(row.id))
+            if rows:
+                cursor = rows[-1].id
+                continue
+            await deps.hub.wait_for(conversation_id, settings.poll_seconds)
+
+    def spec_json(row: specs.SpecRow) -> dict:
+        return {
+            "version": row.version,
+            "markdown": row.markdown,
+            "created": row.created_at.isoformat(),
+            "sketch_ids": [str(i) for i in row.sketch_ids],
+        }
+
+    async def spec_row(conversation_id: uuid.UUID, version: int | None) -> specs.SpecRow:
+        async with pool.connection() as conn:
+            row = (
+                await specs.latest(conn, conversation_id)
+                if version is None
+                else await specs.get(conn, conversation_id, version)
+            )
+        if row is None:
+            raise ApiError(404, "no_spec", "no such spec")
+        return row
+
+    @router.get("/conversations/{conversation_id}/spec")
+    async def latest_spec(conversation_id: Conversation) -> dict:
+        return spec_json(await spec_row(conversation_id, None))
+
+    @router.get("/conversations/{conversation_id}/spec.md")
+    async def latest_spec_markdown(conversation_id: Conversation) -> PlainTextResponse:
+        row = await spec_row(conversation_id, None)
+        return PlainTextResponse(row.markdown, media_type="text/markdown; charset=utf-8")
+
+    @router.get("/conversations/{conversation_id}/spec/{version}")
+    async def spec_version(conversation_id: Conversation, version: int) -> dict:
+        return spec_json(await spec_row(conversation_id, version))
+
+    @router.get("/attachments/{attachment_id}")
+    async def get_attachment(
+        attachment_id: uuid.UUID, request: Request, device: Device
+    ) -> Response:
+        async with pool.connection() as conn:
+            row = await attachments.get_owned(conn, attachment_id, device.id)
+        if row is None:
+            raise ApiError(404, "not_found", "attachment not found")
+        if row.purged_at is not None:
+            raise ApiError(410, "purged", "attachment was purged")
+        etag = f'"{row.sha256}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        try:
+            data = await asyncio.to_thread(store.read, row.path)
+        except OSError:
+            raise ApiError(410, "purged", "attachment file is gone") from None
+        return Response(data, media_type=row.mime, headers={"ETag": etag})
 
     return router

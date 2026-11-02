@@ -1,6 +1,6 @@
 [tools]
 python = "3.12"
-uv = "latest"
+uv = "0.12.23"
 
 [env]
 UV_PYTHON_DOWNLOADS = "never"

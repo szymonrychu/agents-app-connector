@@ -92,3 +92,21 @@ def test_text_is_ascii():
     for f in root.iterdir():
         if f.is_file() and f.suffix in {".py", ".md", ".json"}:
             f.read_bytes().decode("ascii")
+
+
+def test_preset_is_read_only_without_network():
+    perms = load_preset()["spec"]["wrapper"]["permissions"]
+    assert perms["allow"] == ["Read", "Glob"]
+    for tool in (
+        "Bash",
+        "Write",
+        "Edit",
+        "NotebookEdit",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "mcp__*",
+    ):
+        assert tool in perms["deny"]
+    assert not set(perms["allow"]) & set(perms["deny"])
+    assert load_preset()["spec"]["peers"] is False

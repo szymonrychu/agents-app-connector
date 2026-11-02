@@ -12,7 +12,17 @@
       "system_append": "@system_append.md",
       "permissions": {
         "allow": ["Read", "Glob"],
-        "deny": ["WebFetch", "WebSearch", "Bash(curl *)", "Bash(git *)"]
+        "deny": [
+          "Bash",
+          "Write",
+          "Edit",
+          "MultiEdit",
+          "NotebookEdit",
+          "WebFetch",
+          "WebSearch",
+          "Task",
+          "mcp__*"
+        ]
       }
     }
   }

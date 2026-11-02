@@ -129,31 +129,32 @@ async def finish(
     conn: psycopg.AsyncConnection, run_id: int, status: str, reason: str | None
 ) -> int:
     """Settle the in-progress row of a run as handled or failed."""
-    cur = await conn.execute(
-        "UPDATE inbound SET status = %s, reason = %s WHERE run_id = %s AND status = 'in-progress'",
-        (status, reason, run_id),
-    )
-    return cur.rowcount
+    n = 0
+    for row_id in await _ids(
+        conn, "run_id = %s AND status = 'in-progress'", (run_id,)
+    ):
+        n += await transition(conn, "inbound", row_id, "in-progress", status, reason=reason)
+    return n
 
 
 async def requeue(conn: psycopg.AsyncConnection, run_id: int) -> int:
-    cur = await conn.execute(
-        "UPDATE inbound SET status = 'queued', run_id = NULL "
-        "WHERE run_id = %s AND status = 'in-progress'",
-        (run_id,),
-    )
-    return cur.rowcount
+    n = 0
+    for row_id in await _ids(
+        conn, "run_id = %s AND status = 'in-progress'", (run_id,)
+    ):
+        n += await transition(conn, "inbound", row_id, "in-progress", "queued", run_id=None)
+    return n
+
+
+async def _ids(conn: psycopg.AsyncConnection, where: str, params: tuple) -> list[uuid.UUID]:
+    cur = await conn.execute(f"SELECT id FROM inbound WHERE {where} FOR UPDATE", params)
+    return [r[0] for r in await cur.fetchall()]
 
 
 async def fail_queued_for(
     conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, reason: str
 ) -> int:
-    cur = await conn.execute(
-        "UPDATE inbound SET status = 'failed', reason = %s "
-        "WHERE conversation_id = %s AND status = 'queued'",
-        (reason, conversation_id),
-    )
-    return cur.rowcount
+    return len(await fail_queued_rows(conn, conversation_id, reason))
 
 
 async def by_run(conn: psycopg.AsyncConnection, run_id: int) -> InboundRow | None:
@@ -182,11 +183,13 @@ async def latest_sketch(
 async def fail_queued_rows(
     conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, reason: str
 ) -> list[InboundRow]:
-    """Fail every queued row of the conversation and return them."""
-    async with conn.cursor(row_factory=class_row(InboundRow)) as cur:
-        await cur.execute(
-            "UPDATE inbound SET status = 'failed', reason = %s "
-            f"WHERE conversation_id = %s AND status = 'queued' RETURNING {COLUMNS}",
-            (reason, conversation_id),
-        )
-        return await cur.fetchall()
+    """Fail every queued row of the conversation (guarded) and return them."""
+    failed: list[InboundRow] = []
+    where = "conversation_id = %s AND status = 'queued' ORDER BY created_at, id"
+    ids = await _ids(conn, where, (conversation_id,))
+    for row_id in ids:
+        if await transition(conn, "inbound", row_id, "queued", "failed", reason=reason):
+            async with conn.cursor(row_factory=class_row(InboundRow)) as cur:
+                await cur.execute(f"SELECT {COLUMNS} FROM inbound WHERE id = %s", (row_id,))
+                failed.append(await cur.fetchone())
+    return failed

@@ -77,3 +77,23 @@ async def test_next_queued_rules(conn):
     assert await inbound.next_queued(conn) == [d]
     await conn.execute("UPDATE holds SET until = now() - interval '1 minute'")
     assert await inbound.next_queued(conn) == [b, d]
+
+
+async def test_status_changes_are_guarded(conn):
+    dev, conv = await setup(conn)
+    first = await make(conn, conv, dev)
+    second = await make(conn, conv, dev)
+    await inbound.claim_oldest(conn, conv, 5)  # queued -> in-progress (oldest)
+    await inbound.finish(conn, 5, "handled", None)
+    # a handled row is not requeued or refinished by run id
+    assert await inbound.requeue(conn, 5) == 0
+    assert await inbound.finish(conn, 5, "failed", "x") == 0
+    row = await conn.execute("SELECT status FROM inbound WHERE run_id = 5")
+    assert (await row.fetchone())[0] == "handled"
+    # fail_queued_rows only touches queued rows
+    failed = await inbound.fail_queued_rows(conn, conv, "no_preset")
+    assert [r.id for r in failed] == [second] and first != second
+    assert all(r.status == "failed" and r.reason == "no_preset" for r in failed)
+    cur = await conn.execute("SELECT count(*) FROM inbound WHERE status = 'handled'")
+    assert (await cur.fetchone())[0] == 1
+    assert await inbound.fail_queued_rows(conn, conv, "again") == []

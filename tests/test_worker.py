@@ -125,6 +125,18 @@ async def test_one_row_in_progress_blocks_next(worker, fake, upload):
     assert len(fake.messages) == 1
 
 
+async def test_second_tick_while_run_in_progress_creates_no_run(worker, fake, upload, conn):
+    sketch_id, _ = await upload()
+    await worker.tick()
+    await asyncio.gather(worker.tick(), worker.tick())
+    await worker.tick()
+    (row,) = await rows(conn, "SELECT status FROM inbound WHERE id = %s", sketch_id)
+    assert row == ("in-progress",)
+    run_rows = await rows(conn, "SELECT id FROM runs WHERE inbound_id = %s", sketch_id)
+    assert len(run_rows) == 1
+    assert len(fake.messages) == 1
+
+
 async def test_retry_after_crash_posts_once(worker, fake, upload, conn):
     await upload()
     fake.fail_next("post_message", 503)

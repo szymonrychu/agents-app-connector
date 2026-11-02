@@ -86,3 +86,9 @@ async def mark_deleted(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID
         (conversation_id,),
     )
     return cur.rowcount == 1
+
+
+async def get(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> ConversationRow | None:
+    async with conn.cursor(row_factory=class_row(ConversationRow)) as cur:
+        await cur.execute(f"{_SELECT} WHERE c.id = %s", (conversation_id,))
+        return await cur.fetchone()

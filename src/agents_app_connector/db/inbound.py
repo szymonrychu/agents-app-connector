@@ -87,8 +87,11 @@ async def by_client_id(
         return await cur.fetchone()
 
 
-async def next_queued(conn: psycopg.AsyncConnection) -> list[uuid.UUID]:
-    """Conversations with a queued row, no in-progress row and no active hold, oldest first."""
+async def next_queued(
+    conn: psycopg.AsyncConnection, now: datetime | None = None
+) -> list[uuid.UUID]:
+    """Open conversations with a queued row, no in-progress row and no hold active at `now`
+    (the database clock when omitted), oldest first."""
     cur = await conn.execute(
         "SELECT q.conversation_id FROM inbound q "
         "JOIN conversations c ON c.id = q.conversation_id AND c.state = 'open' "
@@ -96,8 +99,9 @@ async def next_queued(conn: psycopg.AsyncConnection) -> list[uuid.UUID]:
         "AND NOT EXISTS (SELECT 1 FROM inbound p WHERE p.conversation_id = q.conversation_id "
         "AND p.status = 'in-progress') "
         "AND NOT EXISTS (SELECT 1 FROM holds h WHERE h.conversation_id = q.conversation_id "
-        "AND h.until > now()) "
-        "GROUP BY q.conversation_id ORDER BY min(q.created_at), q.conversation_id"
+        "AND h.until > coalesce(%s, now())) "
+        "GROUP BY q.conversation_id ORDER BY min(q.created_at), q.conversation_id",
+        (now,),
     )
     return [r[0] for r in await cur.fetchall()]
 
@@ -150,3 +154,39 @@ async def fail_queued_for(
         (reason, conversation_id),
     )
     return cur.rowcount
+
+
+async def by_run(conn: psycopg.AsyncConnection, run_id: int) -> InboundRow | None:
+    """The in-progress row claimed by the run."""
+    async with conn.cursor(row_factory=class_row(InboundRow)) as cur:
+        await cur.execute(
+            f"SELECT {COLUMNS} FROM inbound WHERE run_id = %s AND status = 'in-progress'",
+            (run_id,),
+        )
+        return await cur.fetchone()
+
+
+async def latest_sketch(
+    conn: psycopg.AsyncConnection, conversation_id: uuid.UUID
+) -> InboundRow | None:
+    """The newest sketch row of the conversation, whatever its status."""
+    async with conn.cursor(row_factory=class_row(InboundRow)) as cur:
+        await cur.execute(
+            f"SELECT {COLUMNS} FROM inbound WHERE conversation_id = %s AND kind = 'sketch' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (conversation_id,),
+        )
+        return await cur.fetchone()
+
+
+async def fail_queued_rows(
+    conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, reason: str
+) -> list[InboundRow]:
+    """Fail every queued row of the conversation and return them."""
+    async with conn.cursor(row_factory=class_row(InboundRow)) as cur:
+        await cur.execute(
+            "UPDATE inbound SET status = 'failed', reason = %s "
+            f"WHERE conversation_id = %s AND status = 'queued' RETURNING {COLUMNS}",
+            (reason, conversation_id),
+        )
+        return await cur.fetchall()

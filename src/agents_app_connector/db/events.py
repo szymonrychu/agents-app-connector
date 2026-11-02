@@ -2,9 +2,12 @@
 
 import json
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 
 import psycopg
 from agents_common.db.pool import notify
+from psycopg.rows import class_row
 
 CHANNEL = "app_events"
 
@@ -19,3 +22,25 @@ async def append(
     event_id = (await cur.fetchone())[0]
     await notify(conn, CHANNEL, str(conversation_id))
     return event_id
+
+
+@dataclass(frozen=True)
+class EventRow:
+    id: int
+    conversation_id: uuid.UUID
+    type: str
+    payload: dict
+    created_at: datetime
+
+
+async def after(
+    conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, cursor: int, limit: int = 100
+) -> list[EventRow]:
+    """Events of a conversation with id greater than `cursor`, oldest first."""
+    async with conn.cursor(row_factory=class_row(EventRow)) as cur:
+        await cur.execute(
+            "SELECT id, conversation_id, type, payload, created_at FROM events "
+            "WHERE conversation_id = %s AND id > %s ORDER BY id LIMIT %s",
+            (conversation_id, cursor, limit),
+        )
+        return await cur.fetchall()

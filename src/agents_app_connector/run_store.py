@@ -1,0 +1,58 @@
+"""The agents-common RunStore of the connector's runs.
+
+Storing a first run's session fills the conversation's reservation with it; finishing a run
+settles its in-progress inbound row and releases a reservation that never got a session, each in
+one transaction, so a failed dispatch never leaves a row in progress or a conversation reserved.
+Shared by the dispatch worker and the reply tracker.
+"""
+
+import logging
+
+from agents_common import runs as agent_runs
+from psycopg_pool import AsyncConnectionPool
+
+from agents_app_connector.db import bindings, events, inbound, runs
+
+log = logging.getLogger(__name__)
+
+RUN_FAILED = "run_failed"
+
+
+def status_event(row: inbound.InboundRow, status: str, **extra) -> tuple[str, dict]:
+    """The (type, payload) of a status event of an inbound row."""
+    if row.kind == "sketch":
+        return "sketch_status", {"sketch_id": str(row.id), "status": status, **extra}
+    return "message", {"message_id": str(row.id), "status": status, **extra}
+
+
+class AppRunStore:
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
+
+    async def set_session(self, run_id: agent_runs.RunId, session_id: str) -> None:
+        async with self._pool.connection() as conn, conn.transaction():
+            slug = await runs.set_session(conn, int(run_id), session_id)
+            if slug is not None and await bindings.fill(conn, int(run_id), session_id, slug):
+                log.info("run %s bound its conversation to session %s", run_id, session_id)
+
+    async def set_message(self, run_id: agent_runs.RunId, message_id: str) -> None:
+        async with self._pool.connection() as conn:
+            await runs.set_message(conn, int(run_id), message_id)
+
+    async def finish(
+        self, run_id: agent_runs.RunId, status: agent_runs.RunStatus, reason: str | None
+    ) -> bool:
+        async with self._pool.connection() as conn, conn.transaction():
+            if not await runs.finish(conn, int(run_id), status, reason):
+                return False
+            row = await inbound.by_run(conn, int(run_id))
+            if row is not None:
+                await inbound.finish(conn, int(run_id), status, reason)
+                if status == "failed":
+                    type_, payload = status_event(row, "failed", reason=reason)
+                    await events.append(conn, row.conversation_id, type_, payload)
+            released = await bindings.release_reservation(conn, int(run_id), RUN_FAILED)
+        log.info("run %s finished %s (%s)", run_id, status, reason)
+        if released:
+            log.info("run %s ended without a session: reservation released", run_id)
+        return True

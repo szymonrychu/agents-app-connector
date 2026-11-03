@@ -10,6 +10,12 @@ import logging
 
 import psycopg
 from agents_common import runs as agent_runs
+from agents_common.orchestrator import (
+    NotFound,
+    OrchestratorClient,
+    OrchestratorError,
+    OrchestratorUnavailable,
+)
 from psycopg_pool import AsyncConnectionPool
 
 from agents_app_connector.db import bindings, events, handoffs, inbound, runs
@@ -40,14 +46,35 @@ def handoff_event(row: handoffs.HandoffRow, status: str, **extra) -> dict:
 
 
 class AppRunStore:
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(
+        self, pool: AsyncConnectionPool, orchestrator: OrchestratorClient | None = None
+    ) -> None:
         self._pool = pool
+        self._orchestrator = orchestrator
 
     async def set_session(self, run_id: agent_runs.RunId, session_id: str) -> None:
+        """Bind the conversation to the session a first run just created. When the run was
+        finished or the binding released meanwhile (conversation deleted), the session would be
+        left behind: discard it, best effort."""
         async with self._pool.connection() as conn, conn.transaction():
+            run = await runs.get(conn, int(run_id))
             slug = await runs.set_session(conn, int(run_id), session_id)
-            if slug is not None and await bindings.fill(conn, int(run_id), session_id, slug):
-                log.info("run %s bound its conversation to session %s", run_id, session_id)
+            bound = slug is not None and await bindings.fill(conn, int(run_id), session_id, slug)
+        if bound:
+            log.info("run %s bound its conversation to session %s", run_id, session_id)
+        elif run is not None and run.kind == "first":
+            log.warning("run %s lost its binding: discarding new session %s", run_id, session_id)
+            await self._discard(session_id)
+
+    async def _discard(self, session_id: str) -> None:
+        if self._orchestrator is None:
+            return
+        try:
+            await self._orchestrator.discard_session(session_id)
+        except NotFound:
+            pass
+        except (OrchestratorUnavailable, OrchestratorError):
+            log.warning("could not discard session %s", session_id, exc_info=True)
 
     async def set_message(self, run_id: agent_runs.RunId, message_id: str) -> None:
         async with self._pool.connection() as conn:

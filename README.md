@@ -40,13 +40,18 @@ payload it answers 422 `idempotency_mismatch`.
 
 ### `GET /app/v1/sketch/config`
 
-Limits and version: `{max_long_edge_px, max_png_bytes, max_strokes_bytes, api_version}`.
+Limits and version: `{max_long_edge_px, max_png_bytes, max_strokes_bytes, max_pages, max_upload_bytes, min_edge_px, api_version}`.
 
 ### `POST /app/v1/sketch/sketches`
 
-Multipart upload: `meta` (JSON `{client_id, conversation: "current"|"new", caption?, canvas:
-{w, h, dpi}, page?}`), `sketch.png`, optional `strokes.json`. 202 `{sketch_id,
-conversation_id, status: "queued"}`. 413 `too_large` or `quota_exceeded`, 422 `invalid_request`.
+Multipart upload of one or more pages: `meta` (JSON `{client_id, conversation:
+"current"|"new", conversation_id?, caption?, pages: [{page, canvas: {w, h, dpi}}]}`), then per
+position `i` in `pages` a required `sketch.<i>.png` and an optional `strokes.<i>.json`. Page
+indices are unique, at most `max_pages` pages, all parts together at most `max_upload_bytes`.
+`conversation_id` targets an existing open conversation of the device (404 `not_found` if
+unknown or foreign) and cannot be combined with `conversation: "new"`. 202 `{sketch_id,
+conversation_id, status: "queued"}`. 413 `too_large` or `quota_exceeded`, 422 `invalid_request`
+(also a missing png, an unknown field name or a png without a `pages` entry).
 
 ### `GET /app/v1/sketch/conversations`
 
@@ -138,6 +143,8 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_MIN_EDGE_PX` | 200 | shortest PNG edge accepted |
 | `APPCONN_MAX_PNG_BYTES` | 6291456 | PNG size cap (at most 6 MiB) |
 | `APPCONN_MAX_STROKES_BYTES` | 2097152 | strokes file size cap |
+| `APPCONN_MAX_UPLOAD_BYTES` | 8388608 | all parts of one upload together (at most 8 MiB) |
+| `APPCONN_MAX_PAGES` | 4 | pages per upload (two files per page must fit the orchestrator limit of 8 attachments) |
 | `APPCONN_MAX_META_BYTES` | 16384 | `meta` field size cap |
 | `APPCONN_RATE_PER_MINUTE` | 30 | per-device request rate |
 | `APPCONN_DEVICE_QUOTA_BYTES` | 536870912 | stored bytes per device |

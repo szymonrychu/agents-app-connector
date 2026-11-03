@@ -61,6 +61,9 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
                 "max_long_edge_px": INT,
                 "max_png_bytes": INT,
                 "max_strokes_bytes": INT,
+                "max_pages": INT,
+                "max_upload_bytes": INT,
+                "min_edge_px": INT,
                 "api_version": INT,
             },
         },
@@ -213,17 +216,19 @@ EXTRA_SCHEMAS: dict[str, Any] = {
     "SketchUpload": {
         "type": "object",
         "title": "SketchUpload",
-        "required": ["meta", "sketch.png"],
+        "required": ["meta", "sketch.0.png"],
         "properties": {
             "meta": {
                 "type": "string",
                 "description": (
-                    'JSON: {"client_id": uuid, "conversation": "current"|"new", "caption"?: '
-                    'string, "canvas": {"w", "h", "dpi"}, "page"?: int}'
+                    'JSON: {"client_id": uuid, "conversation": "current"|"new", '
+                    '"conversation_id"?: uuid, "caption"?: string, "pages": [{"page": int, '
+                    '"canvas": {"w", "h", "dpi"}}]}. Part i (sketch.<i>.png, strokes.<i>.json) '
+                    "belongs to pages[i]; every page needs its png."
                 ),
             },
-            "sketch.png": {"type": "string", "format": "binary"},
-            "strokes.json": {"type": "string", "format": "binary"},
+            "sketch.0.png": {"type": "string", "format": "binary"},
+            "strokes.0.json": {"type": "string", "format": "binary"},
         },
     },
 }
@@ -259,7 +264,7 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
 
 SUMMARIES = {
     "/config": "Limits and API version",
-    "/sketches": "Upload a sketch (multipart: meta, sketch.png, optional strokes.json)",
+    "/sketches": "Upload a sketch (multipart: meta, sketch.<i>.png, strokes.<i>.json per page)",
     "/conversations": "List or create conversations",
     "/conversations/{conversation_id}": "Delete a conversation",
     "/conversations/{conversation_id}/messages": "Post a follow-up message",

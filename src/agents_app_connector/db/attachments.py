@@ -21,6 +21,7 @@ class NewAttachment:
     expires_at: datetime
     width: int | None = None
     height: int | None = None
+    page: int | None = None
     id: uuid.UUID | None = None
 
 
@@ -37,6 +38,7 @@ class AttachmentRow:
     path: str
     width: int | None
     height: int | None
+    page: int | None
     created_at: datetime
     expires_at: datetime
     purged_at: datetime | None
@@ -44,7 +46,7 @@ class AttachmentRow:
 
 COLUMNS = (
     "id, inbound_id, conversation_id, device_id, kind, mime, size, sha256, path, width, height, "
-    "created_at, expires_at, purged_at"
+    "page, created_at, expires_at, purged_at"
 )
 
 
@@ -52,8 +54,8 @@ async def insert(conn: psycopg.AsyncConnection, row: NewAttachment) -> uuid.UUID
     attachment_id = row.id or uuid.uuid4()
     await conn.execute(
         "INSERT INTO attachments (id, inbound_id, conversation_id, device_id, kind, mime, size, "
-        "sha256, path, width, height, expires_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "sha256, path, width, height, page, expires_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             attachment_id,
             row.inbound_id,
@@ -66,6 +68,7 @@ async def insert(conn: psycopg.AsyncConnection, row: NewAttachment) -> uuid.UUID
             row.path,
             row.width,
             row.height,
+            row.page,
             row.expires_at,
         ),
     )

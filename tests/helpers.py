@@ -31,15 +31,25 @@ def strokes():
     return json.dumps({"version": 1, "canvas": {"w": 400, "h": 300, "dpi": 300}, "strokes": []})
 
 
+CANVAS = {"w": 400, "h": 300, "dpi": 300}
+
+
+def pages(*indices):
+    return [{"page": i, "canvas": CANVAS} for i in indices]
+
+
 def meta(**over):
-    base = {"client_id": str(uuid.uuid4()), "canvas": {"w": 400, "h": 300, "dpi": 300}}
+    base = {"client_id": str(uuid.uuid4()), "pages": pages(0)}
     return json.dumps({**base, **over})
 
 
-def files(png_bytes=None, with_strokes=False):
-    out = {"sketch.png": ("sketch.png", png_bytes or png(), "image/png")}
-    if with_strokes:
-        out["strokes.json"] = ("strokes.json", strokes().encode(), "application/json")
+def files(png_bytes=None, with_strokes=False, count=1):
+    """Parts sketch.<i>.png (and strokes.<i>.json) for i in range(count)."""
+    out = {}
+    for i in range(count):
+        out[f"sketch.{i}.png"] = (f"sketch.{i}.png", png_bytes or png(), "image/png")
+        if with_strokes:
+            out[f"strokes.{i}.json"] = (f"strokes.{i}.json", strokes().encode(), "application/json")
     return out
 
 

@@ -11,6 +11,9 @@ CONFIG = {
     "max_long_edge_px": 1568,
     "max_png_bytes": 6291456,
     "max_strokes_bytes": 2097152,
+    "max_pages": 4,
+    "max_upload_bytes": 8388608,
+    "min_edge_px": 200,
     "api_version": 1,
 }
 

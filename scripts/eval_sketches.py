@@ -115,12 +115,12 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
         meta = {
             "client_id": str(uuid.uuid4()),
             "conversation": "new",
-            "canvas": {"w": 1568, "h": 1176, "dpi": 300},
+            "pages": [{"page": 0, "canvas": {"w": 1568, "h": 1176, "dpi": 300}}],
         }
         up = client.post(
             f"{base}/sketches",
             data={"meta": json.dumps(meta)},
-            files={"sketch.png": ("sketch.png", png, "image/png")},
+            files={"sketch.0.png": ("sketch.0.png", png, "image/png")},
         )
         up.raise_for_status()
         conversation = up.json()["conversation_id"]

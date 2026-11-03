@@ -5,7 +5,7 @@ import uuid
 
 import httpx
 import pytest
-from helpers import PREFIX, bearer, count, files, meta, png, post, stored_files
+from helpers import CANVAS, PREFIX, bearer, count, files, meta, pages, png, post, stored_files
 
 from agents_app_connector.db import devices
 from agents_app_connector.plugins.sketch import router as sketch_router
@@ -95,16 +95,20 @@ async def test_png_over_cap_413(make_app, token):
     [
         {"extra": 1},
         {"caption": "x" * 501},
-        {"page": -1},
+        {"pages": []},
+        {"pages": [{"page": -1, "canvas": CANVAS}]},
+        {"pages": [{"page": 0}]},
+        {"canvas": CANVAS},
+        {"page": 0},
         {"conversation": "other"},
         {"client_id": "nope"},
-        {"canvas": {"w": 1, "h": 1}},
-        {"canvas": {"w": "400", "h": 300, "dpi": 300}},
-        {"canvas": {"w": 400, "h": -3, "dpi": 300}},
-        {"canvas": {"w": 400, "h": 300, "dpi": 0}},
-        {"canvas": {"w": 400, "h": 300, "dpi": -1}},
-        {"canvas": {"w": 400.5, "h": 300, "dpi": 300}},
-        {"canvas": {"w": 400, "h": 300, "dpi": True}},
+        {"pages": [{"page": 0, "canvas": {"w": 1, "h": 1}}]},
+        {"pages": [{"page": 0, "canvas": {"w": "400", "h": 300, "dpi": 300}}]},
+        {"pages": [{"page": 0, "canvas": {"w": 400, "h": -3, "dpi": 300}}]},
+        {"pages": [{"page": 0, "canvas": {"w": 400, "h": 300, "dpi": 0}}]},
+        {"pages": [{"page": 0, "canvas": {"w": 400, "h": 300, "dpi": -1}}]},
+        {"pages": [{"page": 0, "canvas": {"w": 400.5, "h": 300, "dpi": 300}}]},
+        {"pages": [{"page": 0, "canvas": {"w": 400, "h": 300, "dpi": True}}]},
     ],
 )
 async def test_meta_invalid_422(device_api, token, conn, bad):
@@ -115,7 +119,12 @@ async def test_meta_invalid_422(device_api, token, conn, bad):
 
 @pytest.mark.parametrize("dpi", ["NaN", "Infinity", "-Infinity"])
 async def test_meta_non_finite_dpi_422(device_api, token, dpi):
-    raw = json.dumps({"client_id": str(uuid.uuid4()), "canvas": {"w": 4, "h": 3, "dpi": 0}})
+    raw = json.dumps(
+        {
+            "client_id": str(uuid.uuid4()),
+            "pages": [{"page": 0, "canvas": {"w": 4, "h": 3, "dpi": 0}}],
+        }
+    )
     raw = raw.replace('"dpi": 0', '"dpi": ' + dpi)
     r = await post(device_api, token, raw)
     assert r.status_code == 422
@@ -154,3 +163,128 @@ async def test_failed_transaction_removes_written_files(
 async def test_unauthenticated_401(device_api):
     r = await device_api.post("/sketches", data={"meta": meta()}, files=files())
     assert r.status_code == 401
+
+
+async def _atts(conn):
+    return await (
+        await conn.execute("SELECT kind, page, id FROM attachments ORDER BY kind, page")
+    ).fetchall()
+
+
+async def test_upload_three_pages_one_row(device_api, token, conn, store):
+    r = await post(device_api, token, meta(pages=pages(0, 1, 2)), files(with_strokes=True, count=3))
+    assert r.status_code == 202
+    assert await count(conn, "inbound") == 1
+    atts = await _atts(conn)
+    assert [(a[0], a[1]) for a in atts] == [
+        ("sketch_png", 0),
+        ("sketch_png", 1),
+        ("sketch_png", 2),
+        ("sketch_strokes", 0),
+        ("sketch_strokes", 1),
+        ("sketch_strokes", 2),
+    ]
+    assert len(stored_files(store)) == 6
+
+
+async def test_pages_out_of_order_keep_their_index(device_api, token, conn):
+    r = await post(device_api, token, meta(pages=pages(2, 0)), files(count=2))
+    assert r.status_code == 202
+    first = await (
+        await conn.execute("SELECT page FROM attachments WHERE id = %s", (r.json()["sketch_id"],))
+    ).fetchone()
+    assert first == (2,)
+    assert [a[1] for a in await _atts(conn)] == [0, 2]
+
+
+async def test_duplicate_page_index_422(device_api, token, conn):
+    r = await post(device_api, token, meta(pages=pages(1, 1)), files(count=2))
+    assert r.status_code == 422 and r.json()["error"] == "invalid_request"
+    assert await count(conn, "inbound") == 0
+
+
+async def test_too_many_pages_422(device_api, token, conn):
+    n = 5
+    r = await post(device_api, token, meta(pages=pages(*range(n))), files(count=n))
+    assert r.status_code == 422 and r.json()["error"] == "invalid_request"
+    assert await count(conn, "inbound") == 0
+
+
+async def test_missing_png_for_page_422(device_api, token, conn):
+    fl = files(count=2)
+    del fl["sketch.1.png"]
+    r = await post(device_api, token, meta(pages=pages(0, 1)), fl)
+    assert r.status_code == 422 and r.json()["error"] == "invalid_request"
+    assert await count(conn, "inbound") == 0
+
+
+async def test_extra_png_without_page_422(device_api, token, conn):
+    r = await post(device_api, token, meta(pages=pages(0)), files(count=2))
+    assert r.status_code == 422 and r.json()["error"] == "invalid_request"
+    assert await count(conn, "inbound") == 0
+
+
+async def test_old_single_page_field_names_422(device_api, token):
+    fl = {"sketch.png": ("sketch.png", png(), "image/png")}
+    r = await post(device_api, token, fl=fl)
+    assert r.status_code == 422
+
+
+async def test_total_over_max_upload_bytes_413_nothing_stored(make_app, token, conn, store):
+    limit = len(png()) * 2 + 10
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=make_app(max_upload_bytes=limit)),
+        base_url="http://dev" + PREFIX,
+    ) as c:
+        r = await post(c, token, meta(pages=pages(0, 1, 2)), files(count=3))
+    assert r.status_code == 413 and r.json()["error"] == "too_large"
+    assert await count(conn, "inbound") == 0 and stored_files(store) == []
+
+
+async def test_conversation_id_targets_older_conversation(device_api, token, conn):
+    old = (await post(device_api, token, meta(conversation="new"))).json()["conversation_id"]
+    new = (await post(device_api, token, meta(conversation="new"))).json()["conversation_id"]
+    assert old != new
+    r = await post(device_api, token, meta(conversation_id=old))
+    assert r.status_code == 202 and r.json()["conversation_id"] == old
+    row = await (
+        await conn.execute(
+            "SELECT conversation_id FROM inbound WHERE id = %s", (r.json()["sketch_id"],)
+        )
+    ).fetchone()
+    assert str(row[0]) == old
+
+
+async def test_conversation_id_foreign_404(device_api, token, conn):
+    other = (await devices.create(conn, "sketch", "other"))[1]
+    foreign = (await post(device_api, other, meta(conversation="new"))).json()["conversation_id"]
+    for cid in (foreign, str(uuid.uuid4())):
+        r = await post(device_api, token, meta(conversation_id=cid))
+        assert r.status_code == 404 and r.json()["error"] == "not_found"
+    assert await count(conn, "inbound") == 1
+
+
+async def test_conversation_id_with_new_422(device_api, token, conn):
+    cid = (await post(device_api, token, meta(conversation="new"))).json()["conversation_id"]
+    r = await post(device_api, token, meta(conversation="new", conversation_id=cid))
+    assert r.status_code == 422 and r.json()["error"] == "invalid_request"
+    assert await count(conn, "inbound") == 1
+
+
+async def test_replay_same_multi_page_payload_200(device_api, token, conn, store):
+    m = meta(pages=pages(0, 1))
+    first = await post(device_api, token, m, files(with_strokes=True, count=2))
+    second = await post(device_api, token, m, files(with_strokes=True, count=2))
+    assert first.status_code == 202 and second.status_code == 200
+    assert second.json() == first.json()
+    assert await count(conn, "inbound") == 1 and len(stored_files(store)) == 4
+
+
+async def test_config_reports_page_limits(device_api, token):
+    r = await device_api.get("/config", headers=bearer(token))
+    body = r.json()
+    assert (body["max_pages"], body["max_upload_bytes"], body["min_edge_px"]) == (
+        4,
+        8388608,
+        200,
+    )

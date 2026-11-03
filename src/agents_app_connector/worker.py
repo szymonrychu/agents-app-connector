@@ -296,7 +296,7 @@ class Worker:
             if first and row.kind == "message":
                 source = await inbound.latest_sketch(conn, row.conversation_id) or row
             rows = await attachments.for_inbound(conn, source.id) if source.kind == "sketch" else []
-        rows.sort(key=lambda a: a.kind)  # image first, strokes second
+        rows.sort(key=lambda a: (a.page or 0, a.kind))  # per page: image first, strokes second
         files: list[TurnFile] = []
         missing = False
         for att in rows:
@@ -304,7 +304,7 @@ class Worker:
             if data is None:
                 missing = True
                 continue
-            files.append(TurnFile(att.id, att.kind, att.path, att.mime, data))
+            files.append(TurnFile(att.id, att.kind, att.path, att.mime, data, att.page))
         plugin = REGISTRY[conv.plugin]
         turn = TurnInput(
             kind=row.kind,  # type: ignore[arg-type]

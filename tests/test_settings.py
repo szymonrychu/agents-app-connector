@@ -33,7 +33,8 @@ def test_defaults():
     s = load_settings(Settings)
     assert (s.max_long_edge_px, s.max_png_bytes, s.max_strokes_bytes) == (1568, 6291456, 2097152)
     assert s.preset_name == "sketch-translator" and s.device_port == 8001
-    assert s.max_body_bytes == 6291456 + 2097152 + 16384 + 65536
+    assert s.max_body_bytes == 8388608 + 16384 + 65536
+    assert (s.max_pages, s.max_upload_bytes) == (4, 8388608)
     assert s.admin_allowed_cidrs == ["127.0.0.1/32"]
     assert s.handoff_presets == []
 
@@ -63,6 +64,18 @@ def test_png_cap_bounded(monkeypatch):
     assert "APPCONN_MAX_PNG_BYTES" in problems()
 
 
-def test_png_plus_strokes_bounded(monkeypatch):
-    monkeypatch.setenv("APPCONN_MAX_STROKES_BYTES", "2097153")
-    assert "APPCONN_MAX_STROKES_BYTES" in problems()
+def test_max_upload_bytes_cap(monkeypatch):
+    monkeypatch.setenv("APPCONN_MAX_UPLOAD_BYTES", "8388609")
+    assert "APPCONN_MAX_UPLOAD_BYTES" in problems()
+
+
+def test_png_cap_within_upload_cap(monkeypatch):
+    monkeypatch.setenv("APPCONN_MAX_UPLOAD_BYTES", "1000000")
+    assert "APPCONN_MAX_PNG_BYTES" in problems()
+
+
+def test_max_pages_fits_orchestrator_attachment_limit(monkeypatch):
+    monkeypatch.setenv("APPCONN_MAX_PAGES", "5")
+    assert "APPCONN_MAX_PAGES" in problems()
+    monkeypatch.setenv("APPCONN_MAX_PAGES", "4")
+    assert load_settings(Settings).max_pages == 4

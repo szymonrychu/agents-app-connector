@@ -26,8 +26,14 @@ from agents_app_connector.plugins.sketch import handoff_routes
 
 PLUGIN_ID = "sketch"
 API_VERSION = 1
-PNG_FIELD = "sketch.png"
-STROKES_FIELD = "strokes.json"
+
+
+def png_field(index: int) -> str:
+    return f"sketch.{index}.png"
+
+
+def strokes_field(index: int) -> str:
+    return f"strokes.{index}.json"
 
 
 def _sha(data: bytes) -> str:
@@ -97,36 +103,71 @@ def build_router(deps: PluginDeps) -> APIRouter:
             "max_long_edge_px": settings.max_long_edge_px,
             "max_png_bytes": settings.max_png_bytes,
             "max_strokes_bytes": settings.max_strokes_bytes,
+            "max_pages": settings.max_pages,
+            "max_upload_bytes": settings.max_upload_bytes,
+            "min_edge_px": settings.min_edge_px,
             "api_version": API_VERSION,
         }
 
     @router.post("/sketches")
     async def upload(request: Request, device: Device) -> JSONResponse:
         async with request.form(
-            max_files=2, max_fields=1, max_part_size=settings.max_meta_bytes
+            max_files=2 * settings.max_pages, max_fields=1, max_part_size=settings.max_meta_bytes
         ) as form:
             meta = _parse_meta(form.get("meta"), settings.max_meta_bytes)
-            if any(k not in ("meta", PNG_FIELD, STROKES_FIELD) for k in form):
-                raise ApiError(422, "invalid_request", "unknown form field")
-            png = await _read_part(form.get(PNG_FIELD), PNG_FIELD, settings.max_png_bytes)
-            strokes = None
-            if form.get(STROKES_FIELD) is not None:
-                strokes = await _read_part(
-                    form.get(STROKES_FIELD), STROKES_FIELD, settings.max_strokes_bytes
+            count = len(meta.pages)
+            if count > settings.max_pages:
+                raise ApiError(
+                    422, "invalid_request", f"meta.pages: at most {settings.max_pages} pages"
                 )
+            allowed = {"meta"}
+            for i in range(count):
+                allowed |= {png_field(i), strokes_field(i)}
+            if any(k not in allowed for k in form):
+                raise ApiError(422, "invalid_request", "unknown form field")
+            pngs: list[bytes] = []
+            strokes: list[bytes | None] = []
+            for i in range(count):
+                pngs.append(
+                    await _read_part(form.get(png_field(i)), png_field(i), settings.max_png_bytes)
+                )
+                part = form.get(strokes_field(i))
+                strokes.append(
+                    None
+                    if part is None
+                    else await _read_part(part, strokes_field(i), settings.max_strokes_bytes)
+                )
+        new_bytes = sum(len(b) for b in pngs) + sum(len(b) for b in strokes if b is not None)
+        if new_bytes > settings.max_upload_bytes:
+            raise ApiError(413, "too_large", f"upload exceeds {settings.max_upload_bytes} bytes")
         # The CPU-bound validation runs in threads, off the event loop.
-        width, height = await asyncio.to_thread(
-            validate_png,
-            png,
-            max_long_edge=settings.max_long_edge_px,
-            min_edge=settings.min_edge_px,
-            max_bytes=settings.max_png_bytes,
+        sizes = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    validate_png,
+                    data,
+                    max_long_edge=settings.max_long_edge_px,
+                    min_edge=settings.min_edge_px,
+                    max_bytes=settings.max_png_bytes,
+                )
+                for data in pngs
+            )
         )
-        if strokes is not None:
-            await asyncio.to_thread(validate_strokes, strokes, max_bytes=settings.max_strokes_bytes)
+        await asyncio.gather(
+            *(
+                asyncio.to_thread(validate_strokes, data, max_bytes=settings.max_strokes_bytes)
+                for data in strokes
+                if data is not None
+            )
+        )
 
         meta_dict = meta.model_dump(mode="json")
-        digests = [_sha(png)] + ([_sha(strokes)] if strokes is not None else [])
+        digests = [
+            _sha(d)
+            for png, st in zip(pngs, strokes, strict=True)
+            for d in (png, st)
+            if d is not None
+        ]
         fp = inbound.fingerprint(meta_dict, digests)
         written: list[str] = []
         try:
@@ -141,11 +182,15 @@ def build_router(deps: PluginDeps) -> APIRouter:
                         },
                         status_code=200,
                     )
-                new_bytes = len(png) + (len(strokes) if strokes is not None else 0)
                 used = await attachments.device_usage_bytes(conn, device.id)
                 if used + new_bytes > settings.device_quota_bytes:
                     raise ApiError(413, "quota_exceeded", "device storage quota exceeded")
-                if meta.conversation == "new":
+                if meta.conversation_id is not None:
+                    owned_row = await conversations.get_owned(conn, meta.conversation_id, device.id)
+                    if owned_row is None:
+                        raise ApiError(404, "not_found", "conversation not found")
+                    conversation_id = meta.conversation_id
+                elif meta.conversation == "new":
                     conversation_id = await conversations.create(conn, device.id, PLUGIN_ID)
                 else:
                     conversation_id = await conversations.current_or_new(conn, device.id, PLUGIN_ID)
@@ -162,12 +207,19 @@ def build_router(deps: PluginDeps) -> APIRouter:
                     meta=meta_dict,
                 )
                 expires_at = clock.utcnow() + timedelta(days=settings.retention_days)
-                parts = [("sketch_png", "image/png", png, sketch_id, width, height)]
-                if strokes is not None:
+                parts = []
+                for i, page_meta in enumerate(meta.pages):
+                    w, h = sizes[i]
                     parts.append(
-                        ("sketch_strokes", "application/json", strokes, uuid.uuid4(), None, None)
+                        ("sketch_png", "image/png", pngs[i], sketch_id if i == 0 else uuid.uuid4())
+                        + (w, h, page_meta.page)
                     )
-                for kind, mime, data, att_id, w, h in parts:
+                    if strokes[i] is not None:
+                        parts.append(
+                            ("sketch_strokes", "application/json", strokes[i], uuid.uuid4())
+                            + (None, None, page_meta.page)
+                        )
+                for kind, mime, data, att_id, w, h, page in parts:
                     stored = await asyncio.to_thread(store.put, device.id, att_id, data)
                     written.append(stored.path)
                     await attachments.insert(
@@ -185,6 +237,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
                             expires_at=expires_at,
                             width=w,
                             height=h,
+                            page=page,
                         ),
                     )
                 await conversations.touch(conn, conversation_id)

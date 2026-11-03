@@ -6,6 +6,9 @@
     "model": "claude-sonnet-5-5",
     "replicas": 1,
     "reuse_running_agent": true,
+    "inactivity": {
+      "close_seconds": 900
+    },
     "peers": false,
     "wrapper": {
       "system_append": "@system_append.md",

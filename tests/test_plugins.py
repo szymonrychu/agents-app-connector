@@ -70,6 +70,8 @@ def test_preset_model_and_prompt():
     assert "[[?word]]" in text and "mermaid" in text
     assert preset["superleader_manageable"] is True
     assert "allow" not in spec["wrapper"]["permissions"]
+    assert "discard_after_idle_seconds" not in spec
+    assert spec["inactivity"] == {"close_seconds": 900}
     assert "crop" not in text.lower()
 
 
@@ -79,6 +81,7 @@ def test_preset_keys_valid_for_session_spec():
         "model",
         "replicas",
         "reuse_running_agent",
+        "inactivity",
         "peers",
         "wrapper",
     }

@@ -10,6 +10,7 @@ argv) and is never printed. This is a measurement, not a gate: the exit code is 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -100,6 +101,12 @@ def _wait_done(client: httpx.Client, base: str, conversation: str, timeout: floa
     return "timeout"
 
 
+def _delete_conversation(client: httpx.Client, base: str, conversation: str) -> None:
+    """Best effort: a failed delete must not hide the item's result."""
+    with contextlib.suppress(httpx.HTTPError):
+        client.delete(f"{base}/conversations/{conversation}")
+
+
 def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict:
     png = (ROOT / "eval" / "sketches" / f"{name}.png").read_bytes()
     expected = json.loads((ROOT / "eval" / "expected" / f"{name}.json").read_text())
@@ -111,6 +118,7 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
         "diagram_ok": False,
         "front_matter": False,
     }
+    conversation = None
     try:
         meta = {
             "client_id": str(uuid.uuid4()),
@@ -137,6 +145,9 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
             )
     except httpx.HTTPError as exc:
         result["error"] = type(exc).__name__
+    finally:
+        if conversation is not None:
+            _delete_conversation(client, base, conversation)
     result["seconds"] = round(time.monotonic() - started, 1)
     return result
 

@@ -126,6 +126,19 @@ async def in_progress(conn: psycopg.AsyncConnection) -> list[RunRow]:
         return await cur.fetchall()
 
 
+async def in_progress_for(
+    conn: psycopg.AsyncConnection, conversation_id: uuid.UUID
+) -> list[RunRow]:
+    """In-progress first and follow runs of the conversation (hand-off runs are not its own)."""
+    async with conn.cursor(row_factory=class_row(RunRow)) as cur:
+        await cur.execute(
+            f"SELECT {COLUMNS} FROM runs WHERE conversation_id = %s AND status = 'in-progress' "
+            "AND kind IN ('first', 'follow') ORDER BY id",
+            (conversation_id,),
+        )
+        return await cur.fetchall()
+
+
 async def get(conn: psycopg.AsyncConnection, run_id: int) -> RunRow | None:
     async with conn.cursor(row_factory=class_row(RunRow)) as cur:
         await cur.execute(f"SELECT {COLUMNS} FROM runs WHERE id = %s", (run_id,))

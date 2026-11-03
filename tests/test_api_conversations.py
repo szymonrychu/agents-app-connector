@@ -1,9 +1,11 @@
 import uuid
 
 import httpx
-from helpers import PREFIX, bearer, count, files, meta, post, stored_files
+import pytest
+from helpers import PREFIX, bearer, count, files, meta, only, post, rows, stored_files
 
 from agents_app_connector.db import devices
+from agents_app_connector.worker import Worker
 
 
 async def msg(api, token, cid, text="hello", client_id=None):
@@ -104,3 +106,65 @@ async def test_delete_conversation_removes_files_and_specs(device_api, token, co
         await device_api.delete(f"/conversations/{cid}", headers=bearer(token))
     ).status_code == 404
     assert (await msg(device_api, token, cid)).status_code == 404
+
+
+async def _bound(device_api, token, worker, upload, fake):
+    _, cid = await upload()
+    await worker.tick()
+    return cid, only(fake.sessions.values())
+
+
+@pytest.fixture
+def worker(orchestrator, pool, settings, store, preset):
+    return Worker(orchestrator, pool, settings, store)
+
+
+async def test_delete_closes_bound_session_and_releases_binding(
+    device_api, token, worker, upload, fake, conn
+):
+    cid, session = await _bound(device_api, token, worker, upload, fake)
+    d = await device_api.delete(f"/conversations/{cid}", headers=bearer(token))
+    assert d.status_code == 204
+    assert fake.discarded == [session["id"]]
+    (b,) = await rows(conn, "SELECT released_at, reason FROM bindings")
+    assert b[0] is not None and b[1] == "conversation_deleted"
+    (run,) = await rows(conn, "SELECT status, reason FROM runs")
+    assert run == ("failed", "conversation_deleted")
+    (row,) = await rows(conn, "SELECT status, reason FROM inbound")
+    assert row == ("failed", "conversation_deleted")
+
+
+async def test_delete_without_binding_calls_nothing(device_api, token, fake):
+    cid = (await device_api.post("/conversations", headers=bearer(token))).json()["id"]
+    assert (
+        await device_api.delete(f"/conversations/{cid}", headers=bearer(token))
+    ).status_code == 204
+    assert fake.discarded == []
+
+
+async def test_delete_never_discards_handoff_target(device_api, token, worker, upload, fake, conn):
+    cid, session = await _bound(device_api, token, worker, upload, fake)
+    other = str(uuid.uuid4())
+    fake.sessions[other] = {**session, "id": other, "slug": "app-handoff-abc"}
+    (device_id,) = await (await conn.execute("SELECT id FROM devices")).fetchone()
+    await conn.execute(
+        "INSERT INTO handoffs (id, conversation_id, device_id, client_id, fingerprint, "
+        "spec_version, target_session_id, session_slug) "
+        "VALUES (%s, %s, %s, %s, 'x', 1, %s, 'app-handoff-abc')",
+        (uuid.uuid4(), cid, device_id, uuid.uuid4(), other),
+    )
+    d = await device_api.delete(f"/conversations/{cid}", headers=bearer(token))
+    assert d.status_code == 204
+    assert fake.discarded == [session["id"]]
+
+
+@pytest.mark.parametrize("status", [404, 503])
+async def test_delete_still_204_when_orchestrator_refuses(
+    device_api, token, worker, upload, fake, conn, status
+):
+    cid, _ = await _bound(device_api, token, worker, upload, fake)
+    fake.fail_next("discard_session", status)
+    d = await device_api.delete(f"/conversations/{cid}", headers=bearer(token))
+    assert d.status_code == 204
+    (b,) = await rows(conn, "SELECT reason FROM bindings")
+    assert b == ("conversation_deleted",)

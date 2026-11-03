@@ -2,12 +2,14 @@
 
 import asyncio
 import hashlib
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Annotated
 
 import psycopg
+from agents_common.orchestrator import NotFound, OrchestratorError, OrchestratorUnavailable
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
@@ -18,13 +20,22 @@ from agents_app_connector import clock
 from agents_app_connector.api.auth import active_device, device_auth
 from agents_app_connector.api.errors import ApiError
 from agents_app_connector.api.schemas import MessageIn, SketchMeta
-from agents_app_connector.db import attachments, conversations, events, inbound, specs
+from agents_app_connector.db import (
+    attachments,
+    bindings,
+    conversations,
+    events,
+    inbound,
+    runs,
+    specs,
+)
 from agents_app_connector.db.devices import DeviceRow
 from agents_app_connector.images import validate_png, validate_strokes
 from agents_app_connector.plugins import PluginDeps
 from agents_app_connector.plugins.sketch import handoff_routes
 
 PLUGIN_ID = "sketch"
+log = logging.getLogger(__name__)
 API_VERSION = 1
 
 
@@ -274,6 +285,17 @@ def build_router(deps: PluginDeps) -> APIRouter:
             for r in rows
         ]
 
+    async def _discard_session(session_id: uuid.UUID) -> None:
+        """Close the conversation's translator session; best effort, idle close is the fallback."""
+        if deps.orchestrator is None:
+            return
+        try:
+            await deps.orchestrator.discard_session(str(session_id))
+        except NotFound:
+            pass
+        except (OrchestratorUnavailable, OrchestratorError):
+            log.warning("could not discard session %s", session_id, exc_info=True)
+
     @router.post("/conversations", status_code=201)
     async def create_conversation(device: Device) -> dict[str, str]:
         async with pool.connection() as conn:
@@ -287,10 +309,18 @@ def build_router(deps: PluginDeps) -> APIRouter:
                 raise ApiError(404, "not_found", "conversation not found")
             await conversations.mark_deleted(conn, conversation_id)
             await inbound.fail_queued_for(conn, conversation_id, "conversation_deleted")
+            for run in await runs.in_progress_for(conn, conversation_id):
+                if await runs.finish(conn, run.id, "failed", "conversation_deleted"):
+                    await inbound.finish(conn, run.id, "failed", "conversation_deleted")
+            binding = await bindings.active(conn, conversation_id)
+            if binding is not None:
+                await bindings.release(conn, binding.id, "conversation_deleted")
             await specs.delete_for(conn, conversation_id)
             paths = await attachments.delete_for_conversation(conn, conversation_id)
         for path in paths:
             await asyncio.to_thread(store.delete, path)
+        if binding is not None and binding.session_id is not None:
+            await _discard_session(binding.session_id)
         return Response(status_code=204)
 
     @router.post("/conversations/{conversation_id}/messages", status_code=202)

@@ -1,0 +1,11 @@
+{
+  "words": [
+    "input",
+    "parse",
+    "output",
+    "check",
+    "this"
+  ],
+  "diagram": "flowchart",
+  "min_word_recall": 0.8
+}

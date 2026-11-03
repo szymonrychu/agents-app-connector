@@ -1,6 +1,6 @@
 # Eval set
 
-Eight synthetic handwriting sketches (`sketches/*.png`, 8-bit grayscale, long edge 1568 px) with
+Nine synthetic handwriting sketches (`sketches/*.png`, 8-bit grayscale except `09-colour-shapes`, which is RGB with black, blue and red ink; long edge 1568 px) with
 expected words and diagram kind (`expected/*.json`). They contain no personal data.
 
 Regenerate (deterministic, seed 7, no platform fonts: glyphs are drawn from a stroke table with

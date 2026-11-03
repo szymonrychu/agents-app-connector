@@ -69,3 +69,22 @@ def test_single_page_prompt_lists_page_index():
     assert f"Image 1: sketch-{t.files[0].attachment_id}.png (page 0)" in p
     assert "pages of one sketch" not in p
     assert "the exact path follows" not in p
+
+
+def test_system_append_explains_colours_and_shapes():
+    from agents_app_connector.plugins.sketch import load_preset
+
+    text = load_preset()["spec"]["wrapper"]["system_append"]
+    for word in (
+        "black",
+        "red",
+        "blue",
+        "green",
+        "orange",
+        "purple",
+        "rectangle",
+        "arrow",
+        "mermaid",
+    ):
+        assert word in text
+    text.encode("ascii")

@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import meta, only, png, post, rows
+from helpers import files, meta, only, pages, png, post, rows
 
 from agents_app_connector.db import bindings, conversations, inbound
 from agents_app_connector.run_store import AppRunStore
@@ -321,3 +321,38 @@ async def test_failing_handoff_tick_keeps_dispatching(worker, fake, upload, monk
     await upload(caption="login")
     await worker.tick()
     assert len(fake.messages) == 1
+
+
+async def _upload_pages(device_api, token, order):
+    resp = await post(
+        device_api, token, meta(pages=pages(*order)), files(with_strokes=True, count=len(order))
+    )
+    assert resp.status_code == 202, resp.text
+
+
+async def test_render_sorts_files_by_page_then_kind(worker, fake, device_api, token, conn):
+    await _upload_pages(device_api, token, [2, 0, 1])
+    await worker.tick()
+    msg = only(fake.messages.values())
+    names = [a.name.split("-")[0] for a in fake.attachments[msg["id"]]]
+    assert names == ["sketch", "strokes"] * 3
+    ids = [a.name for a in fake.attachments[msg["id"]]]
+    by_page = {}
+    for page, kind, aid in await rows(conn, "SELECT page, kind, id FROM attachments"):
+        by_page[(page, kind)] = aid
+    expect = []
+    for page in (0, 1, 2):
+        expect.append(f"sketch-{by_page[(page, 'sketch_png')]}.png")
+        expect.append(f"strokes-{by_page[(page, 'sketch_strokes')]}.json")
+    assert ids == expect
+
+
+async def test_missing_one_page_file_marks_missing(worker, fake, device_api, token, conn):
+    await _upload_pages(device_api, token, [0, 1])
+    await conn.execute(
+        "UPDATE attachments SET purged_at = now() WHERE kind = 'sketch_png' AND page = 1"
+    )
+    await worker.tick()
+    msg = only(fake.messages.values())
+    assert "(sketch file no longer stored)" in msg["text"]
+    assert "(page 0)" in msg["text"] and "(page 1)" not in msg["text"]

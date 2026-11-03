@@ -31,6 +31,7 @@ class TurnFile:
     name: str
     mime: str
     data: bytes
+    page: int | None = None
 
 
 @dataclass(frozen=True)

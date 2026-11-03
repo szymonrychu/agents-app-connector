@@ -78,15 +78,17 @@ class SketchPlugin:
     def render_prompt(self, turn: "TurnInput") -> str:
         parts: list[str] = []
         if turn.kind == "sketch" or any(f.kind == "sketch_png" for f in turn.files):
-            png = next((f for f in turn.files if f.kind == "sketch_png"), None)
-            if png is None:
+            pngs = [f for f in turn.files if f.kind == "sketch_png"]
+            if not pngs:
                 parts.append(MISSING_FILE)
             else:
-                name = _name("sketch_png", png.attachment_id)
-                parts.append(
-                    f"Image 1: {name} (the exact path follows in the Attached files line; "
-                    f'find it with Glob ".attachments/**/{name}" and Read it)'
-                )
+                lines = [
+                    f"Image {i}: {_name('sketch_png', f.attachment_id)} (page {f.page or 0})"
+                    for i, f in enumerate(pngs, 1)
+                ]
+                parts.append("\n".join(lines))
+                if len(pngs) > 1:
+                    parts.append("The images are pages of one sketch; treat them together.")
         if turn.caption:
             parts.append(f"Caption: {turn.caption}")
         if turn.text:

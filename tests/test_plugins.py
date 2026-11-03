@@ -69,7 +69,7 @@ def test_preset_model_and_prompt():
     assert len(text) <= 16384
     assert "[[?word]]" in text and "mermaid" in text
     assert preset["superleader_manageable"] is True
-    assert spec["wrapper"]["permissions"]["allow"] == ["Read", "Glob"]
+    assert "allow" not in spec["wrapper"]["permissions"]
     assert "crop" not in text.lower()
 
 
@@ -79,11 +79,9 @@ def test_preset_keys_valid_for_session_spec():
         "model",
         "replicas",
         "reuse_running_agent",
-        "discard_after_idle_seconds",
         "peers",
         "wrapper",
     }
-    assert 60 <= spec["discard_after_idle_seconds"] <= 2592000
     assert set(spec["wrapper"]) <= {"system_append", "permissions"}
 
 
@@ -96,7 +94,7 @@ def test_text_is_ascii():
 
 def test_preset_is_read_only_without_network():
     perms = load_preset()["spec"]["wrapper"]["permissions"]
-    assert perms["allow"] == ["Read", "Glob"]
+    assert "allow" not in perms
     for tool in (
         "Bash",
         "Write",
@@ -109,5 +107,4 @@ def test_preset_is_read_only_without_network():
         "mcp__*",
     ):
         assert tool in perms["deny"]
-    assert not set(perms["allow"]) & set(perms["deny"])
     assert load_preset()["spec"]["peers"] is False

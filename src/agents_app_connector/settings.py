@@ -6,6 +6,11 @@ from agents_common.settings import BaseServiceSettings, CsvList
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
+# Orchestrator attachment limits (agents-orchestrator settings attachments_max_count and
+# attachments_max_total_bytes defaults); a turn carries every file of one upload.
+ORCHESTRATOR_ATTACHMENTS_MAX_COUNT = 8
+ORCHESTRATOR_ATTACHMENTS_MAX_TOTAL_BYTES = 8388608
+
 
 def _var(info: ValidationInfo) -> str:
     return f"APPCONN_{str(info.field_name).upper()}"
@@ -22,6 +27,8 @@ class Settings(BaseServiceSettings):
     min_edge_px: int = Field(200, ge=1)
     max_png_bytes: int = 6291456
     max_strokes_bytes: int = 2097152
+    max_upload_bytes: int = 8388608
+    max_pages: int = Field(4, ge=1, le=32)
     max_meta_bytes: int = 16384
     rate_per_minute: int = Field(30, ge=1)
     device_quota_bytes: int = 536870912
@@ -37,7 +44,7 @@ class Settings(BaseServiceSettings):
 
     @property
     def max_body_bytes(self) -> int:
-        return self.max_png_bytes + self.max_strokes_bytes + self.max_meta_bytes + 65536
+        return self.max_upload_bytes + self.max_meta_bytes + 65536
 
     @field_validator("admin_allowed_cidrs")
     @classmethod
@@ -51,11 +58,19 @@ class Settings(BaseServiceSettings):
 
     @model_validator(mode="after")
     def _attachment_caps(self):
-        # The orchestrator caps one attachment at 6 MiB and all attachments of a message at 8 MiB.
+        # The orchestrator caps one attachment at 6 MiB, all attachments of a message at 8 MiB
+        # and their count at ORCHESTRATOR_ATTACHMENTS_MAX_COUNT (a png and a strokes file per page).
         if self.max_png_bytes > 6291456:
             raise ValueError("APPCONN_MAX_PNG_BYTES::must be at most 6291456")
-        if self.max_png_bytes + self.max_strokes_bytes > 8388608:
-            raise ValueError("APPCONN_MAX_STROKES_BYTES::png plus strokes must be at most 8388608")
+        if self.max_upload_bytes > ORCHESTRATOR_ATTACHMENTS_MAX_TOTAL_BYTES:
+            raise ValueError("APPCONN_MAX_UPLOAD_BYTES::must be at most 8388608")
+        if self.max_png_bytes > self.max_upload_bytes:
+            raise ValueError("APPCONN_MAX_PNG_BYTES::must be at most APPCONN_MAX_UPLOAD_BYTES")
+        if 2 * self.max_pages > ORCHESTRATOR_ATTACHMENTS_MAX_COUNT:
+            raise ValueError(
+                f"APPCONN_MAX_PAGES::two files per page must fit "
+                f"{ORCHESTRATOR_ATTACHMENTS_MAX_COUNT} attachments per message"
+            )
         return self
 
     @model_validator(mode="after")

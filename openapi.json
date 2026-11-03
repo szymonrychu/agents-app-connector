@@ -204,21 +204,21 @@
       "SketchUpload": {
         "properties": {
           "meta": {
-            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"caption\"?: string, \"canvas\": {\"w\", \"h\", \"dpi\"}, \"page\"?: int}",
+            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}}]}. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png.",
             "type": "string"
           },
-          "sketch.png": {
+          "sketch.0.png": {
             "format": "binary",
             "type": "string"
           },
-          "strokes.json": {
+          "strokes.0.json": {
             "format": "binary",
             "type": "string"
           }
         },
         "required": [
           "meta",
-          "sketch.png"
+          "sketch.0.png"
         ],
         "title": "SketchUpload",
         "type": "object"
@@ -489,10 +489,19 @@
                     "max_long_edge_px": {
                       "type": "integer"
                     },
+                    "max_pages": {
+                      "type": "integer"
+                    },
                     "max_png_bytes": {
                       "type": "integer"
                     },
                     "max_strokes_bytes": {
+                      "type": "integer"
+                    },
+                    "max_upload_bytes": {
+                      "type": "integer"
+                    },
+                    "min_edge_px": {
                       "type": "integer"
                     }
                   },
@@ -1525,7 +1534,7 @@
             "deviceToken": []
           }
         ],
-        "summary": "Upload a sketch (multipart: meta, sketch.png, optional strokes.json)"
+        "summary": "Upload a sketch (multipart: meta, sketch.<i>.png, strokes.<i>.json per page)"
       }
     },
     "/healthz": {

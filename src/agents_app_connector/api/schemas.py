@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PairRequest(BaseModel):
@@ -35,6 +35,15 @@ class Canvas(BaseModel):
     dpi: float = Field(gt=0, le=10000, allow_inf_nan=False)
 
 
+class PageMeta(BaseModel):
+    """One page of a sketch upload: its index and its canvas."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(ge=0, strict=True)
+    canvas: Canvas
+
+
 class SketchMeta(BaseModel):
     """The `meta` form field of a sketch upload."""
 
@@ -42,9 +51,17 @@ class SketchMeta(BaseModel):
 
     client_id: uuid.UUID
     conversation: Literal["current", "new"] = "current"
+    conversation_id: uuid.UUID | None = None
     caption: str | None = Field(default=None, max_length=500)
-    canvas: Canvas
-    page: int = Field(default=0, ge=0, strict=True)
+    pages: list[PageMeta] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _consistent(self):
+        if len({p.page for p in self.pages}) != len(self.pages):
+            raise ValueError("page indices must be unique")
+        if self.conversation_id is not None and self.conversation == "new":
+            raise ValueError("conversation_id cannot be combined with conversation=new")
+        return self
 
 
 class MessageIn(BaseModel):

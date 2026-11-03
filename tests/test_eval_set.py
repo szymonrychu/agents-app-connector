@@ -97,3 +97,43 @@ def test_score_spec_front_matter_missing_key():
         ev.score("# T\n", {"words": [], "diagram": None, "min_word_recall": 0.8}).front_matter
         is False
     )
+
+
+def _item_client(events, fail_get=False):
+    import httpx
+
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path))
+        if request.method == "POST":
+            return httpx.Response(202, json={"conversation_id": "c1"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if request.url.path.endswith("/events"):
+            if fail_get:
+                raise httpx.ConnectError("boom")
+            return httpx.Response(200, json={"cursor": 1, "events": events})
+        return httpx.Response(200, text="# T")
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), calls
+
+
+def test_run_item_deletes_conversation_when_done():
+    events = [{"type": "sketch_status", "status": "done"}]
+    client, calls = _item_client(events)
+    ev.run_item(client, "http://x", "01-notes", 5)
+    assert ("DELETE", "/conversations/c1") in calls
+
+
+def test_run_item_deletes_conversation_on_timeout():
+    client, calls = _item_client([])
+    ev.run_item(client, "http://x", "01-notes", 0)
+    assert ("DELETE", "/conversations/c1") in calls
+
+
+def test_run_item_deletes_conversation_on_failure():
+    client, calls = _item_client([], fail_get=True)
+    result = ev.run_item(client, "http://x", "01-notes", 5)
+    assert result["error"] == "ConnectError"
+    assert ("DELETE", "/conversations/c1") in calls

@@ -6,12 +6,13 @@
     "model": "claude-sonnet-5-5",
     "replicas": 1,
     "reuse_running_agent": true,
-    "discard_after_idle_seconds": 3600,
+    "inactivity": {
+      "close_seconds": 900
+    },
     "peers": false,
     "wrapper": {
       "system_append": "@system_append.md",
       "permissions": {
-        "allow": ["Read", "Glob"],
         "deny": [
           "Bash",
           "Write",

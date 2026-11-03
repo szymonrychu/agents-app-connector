@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+.superpowers/
+.logs/
+.scratchpad/
+.worktrees/
+dist/
+*.egg-info/
+.coverage

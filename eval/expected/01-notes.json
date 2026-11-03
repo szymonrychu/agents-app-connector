@@ -1,0 +1,18 @@
+{
+  "words": [
+    "meeting",
+    "notes",
+    "buy",
+    "milk",
+    "call",
+    "bob",
+    "friday",
+    "ship",
+    "release",
+    "2",
+    "review",
+    "docs"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8
+}

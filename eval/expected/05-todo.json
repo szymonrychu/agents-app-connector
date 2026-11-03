@@ -1,0 +1,15 @@
+{
+  "words": [
+    "todo",
+    "write",
+    "tests",
+    "fix",
+    "lint",
+    "update",
+    "docs",
+    "tag",
+    "release"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8
+}

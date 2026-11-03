@@ -1,0 +1,9 @@
+{{- include "agents-app-connector.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agents-app-connector.fullname" . }}-settings
+  labels:
+    {{- include "agents-app-connector.labels" . | nindent 4 }}
+data:
+  {{- include "agents-app-connector.config" . | nindent 2 }}

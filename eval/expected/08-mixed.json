@@ -1,0 +1,18 @@
+{
+  "words": [
+    "overview",
+    "the",
+    "service",
+    "stores",
+    "sketches",
+    "and",
+    "returns",
+    "a",
+    "spec",
+    "app",
+    "api",
+    "db"
+  ],
+  "diagram": "flowchart",
+  "min_word_recall": 0.8
+}

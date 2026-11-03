@@ -1,0 +1,45 @@
+{{- $fullName := include "agents-app-connector.fullname" . }}
+{{- $ing := .Values.ingress }}
+{{- range $component := list "device" "admin" }}
+{{- $cfg := index $ing $component }}
+{{- if $cfg.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}-{{ $component }}
+  labels:
+    {{- include "agents-app-connector.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ ternary "app" "admin" (eq $component "device") }}
+  annotations:
+    {{- if eq $component "device" }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ $cfg.proxyBodySize | quote }}
+    nginx.ingress.kubernetes.io/limit-rps: {{ $cfg.limitRps | toString | quote }}
+    {{- with $ing.denySourceRanges }}
+    nginx.ingress.kubernetes.io/denylist-source-range: {{ join "," . | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with $cfg.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with $ing.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with $ing.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $cfg.host | quote }}
+      http:
+        paths:
+          - path: {{ $cfg.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-{{ ternary "app" "admin" (eq $component "device") }}
+                port:
+                  name: http
+{{- end }}
+{{- end }}

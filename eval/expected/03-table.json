@@ -1,0 +1,17 @@
+{
+  "words": [
+    "name",
+    "role",
+    "status",
+    "alice",
+    "dev",
+    "active",
+    "bob",
+    "ops",
+    "idle",
+    "cara",
+    "qa"
+  ],
+  "diagram": "table",
+  "min_word_recall": 0.8
+}

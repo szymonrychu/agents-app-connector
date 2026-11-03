@@ -1,0 +1,12 @@
+{
+  "words": [
+    "start",
+    "valid",
+    "yes",
+    "save",
+    "no",
+    "reject"
+  ],
+  "diagram": "flowchart",
+  "min_word_recall": 0.8
+}

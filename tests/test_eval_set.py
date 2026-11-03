@@ -19,7 +19,9 @@ NAMES = [
     "06-sequence",
     "07-rotated",
     "08-mixed",
+    "09-colour-shapes",
 ]
+COLOUR = "09-colour-shapes"
 
 
 def load(name):
@@ -44,12 +46,21 @@ def test_eval_set_regenerates_identically(tmp_path):
             Image.open(tmp_path / "sketches" / f"{name}.png") as new,
             Image.open(ROOT / "eval" / "sketches" / f"{name}.png") as old,
         ):
-            assert new.mode == old.mode == "L"
+            assert new.mode == old.mode == ("RGB" if name == COLOUR else "L")
             assert new.size == old.size
             assert new.tobytes() == old.tobytes()
         assert (tmp_path / "expected" / f"{name}.json").read_bytes() == (
             ROOT / "eval" / "expected" / f"{name}.json"
         ).read_bytes()
+
+
+def test_colour_item_is_rgb_and_others_grayscale():
+    for name in NAMES:
+        with Image.open(ROOT / "eval" / "sketches" / f"{name}.png") as im:
+            assert im.mode == ("RGB" if name == COLOUR else "L"), name
+    with Image.open(ROOT / "eval" / "sketches" / f"{COLOUR}.png") as im:
+        r, g, b = (im.getchannel(i).getextrema()[0] for i in range(3))
+        assert min(r, g, b) < 100  # inked in red or blue, not only gray
 
 
 def test_items_valid_for_upload():

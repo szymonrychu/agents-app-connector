@@ -4,7 +4,8 @@
 
 Deterministic (random seed 7) and independent of platform fonts: every glyph is drawn from a
 built-in stroke table with Pillow ImageDraw primitives only, with per-glyph jitter and a slight
-baseline wobble to look hand drawn. Images are 8-bit grayscale `L`, long edge 1568.
+baseline wobble to look hand drawn. Images are 8-bit grayscale `L`, long edge 1568, except
+09-colour-shapes, which is `RGB` (black, blue and red pens).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from PIL import Image, ImageDraw
 SEED = 7
 W, H = 1568, 1176
 PEN = 4
+BLACK, BLUE, RED = (0, 0, 0), (0, 0, 255), (220, 0, 0)
 MIN_RECALL = 0.8
 
 _P = [(4, 1), (3, 0), (1, 0), (0, 1), (0, 5), (1, 6), (3, 6), (4, 5)]
@@ -92,11 +94,16 @@ ADVANCE = 5.6  # glyph pitch in grid units
 
 
 class Sheet:
-    """A grayscale page with hand-drawn looking primitives; records the words it writes."""
+    """A page with hand-drawn looking primitives; records the words it writes.
 
-    def __init__(self, rng: random.Random, size: tuple[int, int] = (W, H)):
+    Grayscale `L` by default; `rgb=True` makes an `RGB` page whose pen is set with `ink`.
+    """
+
+    def __init__(self, rng: random.Random, size: tuple[int, int] = (W, H), *, rgb: bool = False):
         self.rng = rng
-        self.img = Image.new("L", size, 255)
+        self.rgb = rgb
+        self.ink: int | tuple[int, int, int] = BLACK if rgb else 0
+        self.img = Image.new("RGB" if rgb else "L", size, (255, 255, 255) if rgb else 255)
         self.d = ImageDraw.Draw(self.img)
         self.words: list[str] = []
 
@@ -105,7 +112,7 @@ class Sheet:
 
     def _stroke(self, pts: list[tuple[float, float]], jitter: float = 1.0) -> None:
         pts = [(x + self._j(jitter), y + self._j(jitter)) for x, y in pts]
-        self.d.line(pts, fill=0, width=PEN, joint="curve")
+        self.d.line(pts, fill=self.ink, width=PEN, joint="curve")
 
     def text_width(self, s: str, h: float) -> float:
         return len(s) * ADVANCE * h / 6
@@ -286,6 +293,19 @@ def mixed(rng: random.Random) -> Sheet:
     return s
 
 
+def colour_shapes(rng: random.Random) -> Sheet:
+    s = Sheet(rng, rgb=True)
+    for x0, label in ((100, "INPUT"), (600, "PARSE"), (1100, "OUTPUT")):
+        s.labeled_box(x0, 500, x0 + 320, 620, label)
+    s.ink = BLUE
+    s.arrow((420, 560), (600, 560))
+    s.arrow((920, 560), (1100, 560))
+    s.ink = RED
+    s.text(784, 760, "CHECK THIS", 48, center=True)
+    s.ink = BLACK
+    return s
+
+
 ITEMS = [
     ("01-notes", notes, None),
     ("02-flowchart", flowchart, "flowchart"),
@@ -295,6 +315,7 @@ ITEMS = [
     ("06-sequence", sequence, "sequenceDiagram"),
     ("07-rotated", rotated, None),
     ("08-mixed", mixed, "flowchart"),
+    ("09-colour-shapes", colour_shapes, "flowchart"),
 ]
 
 

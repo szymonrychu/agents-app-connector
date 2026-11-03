@@ -168,3 +168,25 @@ async def test_delete_still_204_when_orchestrator_refuses(
     assert d.status_code == 204
     (b,) = await rows(conn, "SELECT reason FROM bindings")
     assert b == ("conversation_deleted",)
+
+
+async def test_delete_during_session_create_discards_new_session(
+    device_api, token, worker, upload, orchestrator, fake, conn
+):
+    """The conversation is deleted while the worker is creating its session: the new session
+    must not be left behind."""
+    _, cid = await upload()
+    real_create = orchestrator.create_session
+
+    async def create_then_delete(*args, **kwargs):
+        session = await real_create(*args, **kwargs)
+        d = await device_api.delete(f"/conversations/{cid}", headers=bearer(token))
+        assert d.status_code == 204
+        return session
+
+    orchestrator.create_session = create_then_delete
+    await worker.tick()
+    (session,) = fake.sessions.values()
+    assert fake.discarded == [session["id"]]
+    (b,) = await rows(conn, "SELECT session_id, reason FROM bindings")
+    assert b == (None, "conversation_deleted")

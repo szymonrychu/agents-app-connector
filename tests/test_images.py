@@ -39,6 +39,10 @@ def test_rgb_png_accepted():
     assert validate_png(png(300, 300, "RGB"), **KW) == (300, 300)
 
 
+def test_validate_png_accepts_rgb():
+    assert validate_png(png(400, 300, "RGB"), **KW) == (400, 300)
+
+
 def test_long_edge_over_limit_422():
     with pytest.raises(ApiError) as exc:
         validate_png(png(1569, 800), **KW)
@@ -99,6 +103,34 @@ GOOD = {"version": 1, "canvas": {"w": 100, "h": 100, "dpi": 300}, "strokes": []}
 
 def test_strokes_shape():
     assert validate_strokes(json.dumps(GOOD).encode(), max_bytes=1000) == GOOD
+
+
+def test_validate_strokes_accepts_version_2():
+    doc = {
+        "version": 2,
+        "canvas": {"w": 1200, "h": 1600, "dpi": 300.0},
+        "strokes": [
+            {
+                "tool": "fountain",
+                "color": "black",
+                "width": 4.0,
+                "points": [[10.0, 20.0, 0.5, 0], [30.0, 40.0, 0.75, 16]],
+            },
+            {
+                "tool": "rectangle",
+                "color": "red",
+                "width": 4.0,
+                "points": [[100.0, 100.0, 1.0, 500], [400.0, 300.0, 1.0, 900]],
+            },
+            {
+                "tool": "arrow",
+                "color": "blue",
+                "width": 4.0,
+                "points": [[400.0, 200.0, 1.0, 1200], [700.0, 200.0, 1.0, 1500]],
+            },
+        ],
+    }
+    assert validate_strokes(json.dumps(doc).encode(), max_bytes=4000) == doc
 
 
 @pytest.mark.parametrize(

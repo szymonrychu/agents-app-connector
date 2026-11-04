@@ -53,3 +53,17 @@ def test_purge_runs_one_pass_and_prints_counts(monkeypatch, capsys, url, tmp_pat
     monkeypatch.setenv("APPCONN_DATA_DIR", str(tmp_path))
     assert main(["purge"]) == 0
     assert capsys.readouterr().out.strip() == "purged files=0 bytes=0"
+
+
+def test_httpx_request_lines_are_silenced(monkeypatch):
+    """httpx logs full request URLs (query included) at INFO; the relay must not leak them."""
+    import logging
+
+    from agents_app_connector import cli
+
+    monkeypatch.setitem(
+        cli.COMMANDS, "purge", (lambda: type("S", (), {"log_level": "info"})(), lambda s: 0)
+    )
+    monkeypatch.setattr(logging.getLogger("httpx"), "level", logging.NOTSET)
+    assert main(["purge"]) == 0
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING

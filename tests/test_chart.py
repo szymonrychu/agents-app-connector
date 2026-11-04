@@ -223,6 +223,76 @@ def test_secrets_by_reference_and_inline():
     assert ORCH_TOKEN not in yaml.safe_dump(docs)
 
 
+TB_TOKEN = "".join(["tb", "-", "fixture", "-", "value"])
+TB_URL = "http://taskboard-delegate.example.com:8003"
+TASKBOARD = {"taskboard": {"url": TB_URL, "token": TB_TOKEN}}
+
+
+def test_taskboard_unset_renders_no_env():
+    docs = render()
+    for component in ("admin", "app"):
+        env = _env(main(docs, component))
+        assert not [n for n in env if "TASKBOARD" in n]
+    (cm,) = [d for d in docs if d["kind"] == "ConfigMap"]
+    assert not [k for k in cm["data"] if "TASKBOARD" in k]
+    assert f"{FULLNAME}-taskboard" not in _by_name(docs, "Secret")
+
+
+def test_taskboard_token_is_secretref_not_in_configmap():
+    docs = render(TASKBOARD)
+    secrets = _by_name(docs, "Secret")
+    assert secrets[f"{FULLNAME}-taskboard"]["stringData"] == {"token": TB_TOKEN}
+    env = _env(main(docs, "app"))
+    assert env["APPCONN_TASKBOARD_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": f"{FULLNAME}-taskboard",
+        "key": "token",
+    }
+    assert env["APPCONN_TASKBOARD_URL"]["value"] == TB_URL
+    # the pair rule rejects a half pair, so only the app pod (which holds the token) gets either
+    assert not [n for n in _env(main(docs, "admin")) if "TASKBOARD" in n]
+    (init,) = pod(docs, "app")["initContainers"]
+    assert not [n for n in _env(init) if "TASKBOARD" in n]
+    (cm,) = [d for d in docs if d["kind"] == "ConfigMap"]
+    assert TB_TOKEN not in yaml.safe_dump(cm)
+    others = [d for d in docs if d["kind"] != "Secret"]
+    assert TB_TOKEN not in yaml.safe_dump(others)
+
+
+def test_taskboard_existing_secret_referenced():
+    docs = render(
+        {"taskboard": {"url": TB_URL, "existingSecret": "my-tb", "existingSecretKey": "tok"}}
+    )
+    assert f"{FULLNAME}-taskboard" not in _by_name(docs, "Secret")
+    env = _env(main(docs, "app"))
+    assert env["APPCONN_TASKBOARD_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "my-tb",
+        "key": "tok",
+    }
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"taskboard": {"url": TB_URL}}, "taskboard.url requires"),
+        ({"taskboard": {"token": TB_TOKEN}}, "requires taskboard.url"),
+        ({"taskboard": {"existingSecret": "x"}}, "requires taskboard.url"),
+        (
+            {"taskboard": {"url": TB_URL, "token": TB_TOKEN, "existingSecret": "x"}},
+            "only one of taskboard.token and taskboard.existingSecret",
+        ),
+    ],
+)
+def test_taskboard_url_token_pair_rule(override, message):
+    proc = _run(_merge(BASE, override))
+    assert proc.returncode != 0
+    assert message in proc.stderr
+
+
+def test_taskboard_url_without_token_fails_render():
+    proc = _run(_merge(BASE, {"taskboard": {"url": TB_URL}}))
+    assert proc.returncode != 0 and "taskboard" in proc.stderr
+
+
 def test_persistence_options():
     docs = render({"persistence": {"size": "10Gi", "storageClass": "fast"}})
     (pvc,) = [d for d in docs if d["kind"] == "PersistentVolumeClaim"]

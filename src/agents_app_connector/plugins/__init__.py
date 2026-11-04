@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+import httpx
 from agents_common.orchestrator import Attachment
 from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
@@ -12,6 +13,7 @@ from psycopg_pool import AsyncConnectionPool
 from agents_app_connector.api.events import EventHub
 from agents_app_connector.api.limits import RateLimiter
 from agents_app_connector.settings import Settings
+from agents_app_connector.taskboard_stream import TaskChangeRelay
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,8 @@ class PluginDeps:
     limiter: RateLimiter
     hub: EventHub
     orchestrator: Any = None
+    taskboard: httpx.AsyncClient | None = None
+    task_changes: TaskChangeRelay | None = None
 
 
 @dataclass(frozen=True)

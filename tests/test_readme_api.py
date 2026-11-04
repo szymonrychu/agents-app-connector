@@ -30,7 +30,7 @@ def readme_routes() -> set[str]:
 
 def test_readme_lists_every_route():
     expected = {k for k in route_keys() if " /app/" in k}
-    assert len(expected) == 17
+    assert len(expected) == 26  # 17 earlier routes plus 8 task relay routes and the task stream
     assert expected - readme_routes() == set(), "undocumented routes"
     assert readme_routes() - expected == set(), "README documents routes the app lacks"
 
@@ -46,3 +46,18 @@ def test_readme_documents_subcommands_and_settings():
 
 def test_readme_is_ascii():
     assert README.isascii()
+
+
+def test_readme_documents_task_relay_errors_and_rules():
+    api = section("API")
+    for code in (
+        "payload_too_large",
+        "taskboard_unavailable",
+        "taskboard_unconfigured",
+        "already_answered",
+        "stale_version",
+    ):
+        assert f"`{code}`" in api, code
+    assert "APPCONN_TASKBOARD_URL" in section("Configuration")
+    assert "APPCONN_TASKBOARD_TOKEN" in section("Configuration")
+    assert "stores nothing" in api.lower()

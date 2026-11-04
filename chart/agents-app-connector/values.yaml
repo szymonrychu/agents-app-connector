@@ -23,6 +23,15 @@ orchestrator:
   existingSecret: ""
   existingSecretKey: token
 
+# Optional taskboard relay for the Tasks tab of the device app (app pod only). Set the url of the
+# taskboard delegate listener and exactly one of token and existingSecret, or leave all unset: the
+# routes then answer 503 taskboard_unconfigured. The token is the delegate token, not the relay one.
+taskboard:
+  url: ""
+  token: ""
+  existingSecret: ""
+  existingSecretKey: token
+
 # Source allowlist of the admin pod (APPCONN_ADMIN_ALLOWED_CIDRS, admin pod only): the direct peer
 # must be inside one of these CIDRs or the admin API answers 403 (probes excepted).
 adminAllowedCidrs:

@@ -130,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(
         level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
+    # httpx logs every request URL, query included, at INFO; the task relay logs only paths
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     return run(settings)
 
 

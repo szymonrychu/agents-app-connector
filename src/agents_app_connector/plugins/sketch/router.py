@@ -22,7 +22,7 @@ from agents_app_connector.db import attachments, conversations, events, inbound,
 from agents_app_connector.db.devices import DeviceRow
 from agents_app_connector.images import validate_png, validate_strokes
 from agents_app_connector.plugins import PluginDeps
-from agents_app_connector.plugins.sketch import handoff_routes
+from agents_app_connector.plugins.sketch import handoff_routes, task_routes
 
 PLUGIN_ID = "sketch"
 API_VERSION = 1
@@ -435,4 +435,5 @@ def build_router(deps: PluginDeps) -> APIRouter:
         return Response(data, media_type=row.mime, headers={"ETag": etag})
 
     router.include_router(handoff_routes.build_router(deps))
+    router.include_router(task_routes.build_router(deps))
     return router

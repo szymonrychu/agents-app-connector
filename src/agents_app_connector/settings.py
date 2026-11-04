@@ -1,9 +1,10 @@
 """APPCONN_* settings of the connector."""
 
 import ipaddress
+from urllib.parse import urlsplit
 
 from agents_common.settings import BaseServiceSettings, CsvList
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
 # Orchestrator attachment limits (agents-orchestrator settings attachments_max_count and
@@ -41,6 +42,8 @@ class Settings(BaseServiceSettings):
     device_port: int = 8001
     handoff_presets: CsvList = []
     max_text_chars: int = 8000
+    taskboard_url: str | None = None
+    taskboard_token: SecretStr | None = Field(None, repr=False)
 
     @property
     def max_body_bytes(self) -> int:
@@ -55,6 +58,27 @@ class Settings(BaseServiceSettings):
             except ValueError:
                 raise ValueError(f"{_var(info)}::not a CIDR: {item!r}") from None
         return value
+
+    @field_validator("taskboard_url")
+    @classmethod
+    def _taskboard_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError(f"{_var(info)}::must be an absolute http(s) URL")
+        return value
+
+    @model_validator(mode="after")
+    def _taskboard_pair(self):
+        has_token = self.taskboard_token is not None and bool(
+            self.taskboard_token.get_secret_value()
+        )
+        if self.taskboard_url and not has_token:
+            raise ValueError("APPCONN_TASKBOARD_TOKEN::required when APPCONN_TASKBOARD_URL is set")
+        if has_token and not self.taskboard_url:
+            raise ValueError("APPCONN_TASKBOARD_URL::required when APPCONN_TASKBOARD_TOKEN is set")
+        return self
 
     @model_validator(mode="after")
     def _attachment_caps(self):

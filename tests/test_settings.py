@@ -79,3 +79,48 @@ def test_max_pages_fits_orchestrator_attachment_limit(monkeypatch):
     assert "APPCONN_MAX_PAGES" in problems()
     monkeypatch.setenv("APPCONN_MAX_PAGES", "4")
     assert load_settings(Settings).max_pages == 4
+
+
+def test_taskboard_unset_is_allowed():
+    s = load_settings(Settings)
+    assert s.taskboard_url is None and s.taskboard_token is None
+
+
+def test_taskboard_pair_accepted(monkeypatch):
+    monkeypatch.setenv("APPCONN_TASKBOARD_URL", "http://taskboard-delegate:8003")
+    monkeypatch.setenv("APPCONN_TASKBOARD_TOKEN", "test-token")
+    s = load_settings(Settings)
+    assert s.taskboard_url == "http://taskboard-delegate:8003"
+    assert s.taskboard_token.get_secret_value() == "test-token"
+
+
+def error_text() -> str:
+    with pytest.raises(SettingsError) as exc:
+        load_settings(Settings)
+    return str(exc.value)
+
+
+def test_taskboard_url_without_token_is_rejected(monkeypatch):
+    monkeypatch.setenv("APPCONN_TASKBOARD_URL", "http://taskboard-delegate:8003")
+    text = error_text()
+    assert "APPCONN_TASKBOARD_URL" in text and "APPCONN_TASKBOARD_TOKEN" in text
+
+
+def test_taskboard_token_without_url_is_rejected(monkeypatch):
+    monkeypatch.setenv("APPCONN_TASKBOARD_TOKEN", "test-token")
+    text = error_text()
+    assert "APPCONN_TASKBOARD_URL" in text and "APPCONN_TASKBOARD_TOKEN" in text
+
+
+@pytest.mark.parametrize("bad", ["taskboard:8003", "ftp://taskboard", "http://", "/path"])
+def test_taskboard_url_must_be_absolute_http(monkeypatch, bad):
+    monkeypatch.setenv("APPCONN_TASKBOARD_URL", bad)
+    monkeypatch.setenv("APPCONN_TASKBOARD_TOKEN", "test-token")
+    assert "absolute http" in problems()["APPCONN_TASKBOARD_URL"]
+
+
+def test_taskboard_token_not_in_repr(monkeypatch):
+    monkeypatch.setenv("APPCONN_TASKBOARD_URL", "http://taskboard-delegate:8003")
+    monkeypatch.setenv("APPCONN_TASKBOARD_TOKEN", "secret-value-xyz")
+    s = load_settings(Settings)
+    assert "secret-value-xyz" not in repr(s) and "secret-value-xyz" not in str(s)

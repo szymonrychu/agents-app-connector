@@ -48,8 +48,6 @@ async def run_app(
     stop: asyncio.Event,
 ) -> None:
     """Serve until `stop` is set. An injected `orchestrator` is not closed here."""
-    if not settings.orchestrator_agent_url:
-        raise ValueError("APPCONN_ORCHESTRATOR_AGENT_URL is required by the app process")
     pool = await open_pool(settings.database_url.get_secret_value())
     owned = orchestrator is None
     if orchestrator is None:
@@ -67,7 +65,7 @@ async def run_app(
         app = create_device_app(
             pool, settings, plugins, store, orchestrator=orchestrator, taskboard=taskboard
         )
-        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(orchestrator, pool).resolve)
+        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(orchestrator).verify)
         units = {
             "worker": Worker(orchestrator, pool, settings, store),
             "tracker": Tracker(orchestrator, pool, settings),

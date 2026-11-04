@@ -38,15 +38,6 @@ async def active(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> B
         return await cur.fetchone()
 
 
-async def active_session_ids(conn: psycopg.AsyncConnection) -> list[uuid.UUID]:
-    """The sessions of every active binding that has one, oldest binding first."""
-    cur = await conn.execute(
-        "SELECT session_id FROM bindings "
-        "WHERE released_at IS NULL AND session_id IS NOT NULL ORDER BY id"
-    )
-    return [row[0] for row in await cur.fetchall()]
-
-
 async def reserve(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, run_id: int) -> bool:
     """Reserve an unbound conversation for a first run; False when it is bound."""
     cur = await conn.execute(

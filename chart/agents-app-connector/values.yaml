@@ -16,12 +16,9 @@ postgres:
   existingSecret: ""
   existingSecretKey: uri
 
-# The orchestrator API is required: url, and exactly one of token and existingSecret. agentUrl is
-# the orchestrator agent port (no /agent/v1 suffix): the translator tools resolve the bearer of
-# each call to its session with GET /agent/v1/me there.
+# The orchestrator API is required: url, and exactly one of token and existingSecret.
 orchestrator:
   url: ""
-  agentUrl: ""
   token: ""
   existingSecret: ""
   existingSecretKey: token

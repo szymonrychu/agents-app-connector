@@ -5,7 +5,7 @@ description = "Client-plugin connector for user devices on the agents platform"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agents-common @ git+https://github.com/szymonrychu/agents-common@v0.8.0",
+    "agents-common @ git+https://github.com/szymonrychu/agents-common@v0.10.0",
     "fastapi",
     "starlette>=1.6",
     "python-multipart>=0.0.18",
@@ -20,7 +20,7 @@ agents-app-connector = "agents_app_connector.cli:main"
 
 [dependency-groups]
 dev = [
-    "agents-common[testing] @ git+https://github.com/szymonrychu/agents-common@v0.8.0",
+    "agents-common[testing] @ git+https://github.com/szymonrychu/agents-common@v0.10.0",
     "pytest",
     "pytest-asyncio",
     "ruff",

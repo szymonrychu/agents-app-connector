@@ -233,12 +233,13 @@ Revoke a device. 204; 404 `not_found` for an unknown or already revoked device.
 The app process also serves an MCP server (streamable HTTP, stateless, `POST /mcp` on
 `APPCONN_MCP_PORT`) for the sketch-translator sessions. The preset points the translator at it
 through `wrapper.mcp_servers` with the session's own orchestrator agent token as bearer
-(`Authorization: Bearer ${ORCH_AGENT_TOKEN}`). The connector resolves the bearer with `POST
+(`Authorization: Bearer ${ORCH_AGENT_TOKEN}`) and its session id in `X-Orch-Session:
+${ORCH_SESSION_ID}`. The connector verifies the bearer against that one session with `POST
 /api/v1/sessions/{id}/agent-token/verify` on the orchestrator service port (its own service token,
-the token in the body), trying the session of each active binding until one answers 200 (404
-means that session does not own the token; cached 60 s by the token's sha256; the token is never
-logged or stored), then to the in-progress turn of the conversation bound to that
-session. A missing or refused bearer answers 401, an unreachable orchestrator 503.
+the token in the body; 404 means the session does not own the token; cached 60 s by the token's
+sha256 and the session id; the token is never logged or stored), then maps the session to the
+in-progress turn of the conversation bound to it. A missing `X-Orch-Session` header (no fallback),
+a malformed one or a refused bearer answers 401, an unreachable orchestrator 503.
 
 - `document_write(markdown)` stores the next spec version of the conversation: the document is a
   faithful transcription of the page and nothing else. Each call is a new version. Errors:
@@ -255,8 +256,7 @@ transcription from invention, so the prompt and the eval hold the content contra
 
 Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL`,
 `APPCONN_ORCHESTRATOR_URL` and an orchestrator token (`APPCONN_ORCHESTRATOR_TOKEN` or
-`APPCONN_ORCHESTRATOR_TOKEN_FILE`); the `app` command also needs
-`APPCONN_ORCHESTRATOR_AGENT_URL`. A bad configuration exits with code 78.
+`APPCONN_ORCHESTRATOR_TOKEN_FILE`). A bad configuration exits with code 78.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -296,7 +296,6 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_TRUSTED_PROXY_CIDRS` | empty | source CIDRs of the ingress whose `X-Real-IP` names the client IP |
 | `APPCONN_TASKBOARD_URL` | unset | base URL of the taskboard delegate listener; set together with the token or not at all |
 | `APPCONN_TASKBOARD_TOKEN` | unset | delegate bearer for the task relay (not the orchestrator relay token) |
-| `APPCONN_ORCHESTRATOR_AGENT_URL` | unset, required by `app` | orchestrator agent port base URL; required but no longer used to resolve translator callers (they go through the service port); kept so no chart value changes |
 | `APPCONN_MCP_PORT` | 8002 | translator tools port, must differ from the admin and device ports |
 | `APPCONN_MAX_DOCUMENT_BYTES` | 262144 | `document_write` size cap (1024 to 1048576) |
 | `APPCONN_MAX_FEEDBACK_PER_RUN` | 30 | `feedback_add` items per turn (1 to 200) |

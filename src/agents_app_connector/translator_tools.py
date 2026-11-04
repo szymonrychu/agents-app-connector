@@ -1,11 +1,12 @@
 """The translator's MCP server: `document_write` and `feedback_add`, served over streamable HTTP.
 
 The sketch-translator session reaches it through the preset's `wrapper.mcp_servers` entry with
-its own orchestrator agent token as bearer. The connector resolves that token to a session id
-with `POST /api/v1/sessions/{id}/agent-token/verify` on the orchestrator service port, against
-the sessions of its active bindings (cached by the token's sha256, never logged or stored),
-then to the in-progress first or follow run of the conversation bound to that
-session. A session with no such run gets the tool error `no_active_turn`, so a translator can
+its own orchestrator agent token as bearer and its session id in `X-Orch-Session`. The connector
+verifies the bearer against that one session with `OrchestratorClient.verify_agent_token`
+(`POST /api/v1/sessions/{id}/agent-token/verify` on the orchestrator service port; cached by the
+token's sha256 and the session id, never logged or stored); a request without the header is a
+401. The verified session maps to the in-progress first or follow run of the conversation bound
+to it. A session with no such run gets the tool error `no_active_turn`, so a translator can
 write only into its own conversation, and only while one of its turns is running.
 
 `document_write` stores the next spec version through `specs.add` (the app is the single writer
@@ -22,7 +23,6 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from agents_common.orchestrator import (
-    NotFound,
     OrchestratorClient,
     OrchestratorError,
     OrchestratorUnavailable,
@@ -31,11 +31,11 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from psycopg_pool import AsyncConnectionPool
-from pydantic import Field
+from pydantic import Field, ValidationError
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 
-from agents_app_connector.db import bindings, conversations, events, feedback, inbound, runs, specs
+from agents_app_connector.db import conversations, events, feedback, inbound, runs, specs
 from agents_app_connector.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ log = logging.getLogger(__name__)
 SERVER_NAME = "appconn"
 PATH = "/mcp"
 SESSION_STATE = "translator_session_id"
+SESSION_HEADER = "X-Orch-Session"
 IDENTITY_TTL_SECONDS = 60.0
 IDENTITY_CACHE_MAX = 1024
 MAX_FEEDBACK_CHARS = 2000
@@ -74,106 +75,100 @@ FEEDBACK_ADD = (
 
 
 class IdentityUnavailable(Exception):
-    """The orchestrator could not answer who the caller is."""
+    """The orchestrator could not answer whether the caller owns the session."""
 
 
 class OrchestratorIdentity:
-    """Resolve an agent bearer token to its session id through the orchestrator service port.
+    """Check that an agent bearer token belongs to the session the caller names.
 
-    The token goes to `POST /api/v1/sessions/{id}/agent-token/verify` (service-token client) for
-    each session of an active binding until one answers 200; 404 means that session does not own
-    the token. Answers are cached for `ttl` seconds by the token's sha256; a refused token is not
-    cached. The token is only ever sent in the request body, never logged or stored.
+    One `OrchestratorClient.verify_agent_token` call (service-token client) against that single
+    session. Accepted answers are cached for `ttl` seconds by the token's sha256 plus the session
+    id; a refused token is not cached. The token is only ever sent in the request body, never
+    logged or stored.
     """
 
     def __init__(
         self,
         orchestrator: OrchestratorClient,
-        pool: AsyncConnectionPool,
         *,
         ttl: float = IDENTITY_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._orchestrator = orchestrator
-        self._pool = pool
         self._ttl = ttl
         self._clock = clock
-        self._cache: dict[str, tuple[uuid.UUID, float]] = {}
+        self._cache: dict[tuple[str, uuid.UUID], float] = {}
 
-    async def resolve(self, token: str) -> uuid.UUID | None:
-        key = hashlib.sha256(token.encode()).hexdigest()
+    async def verify(self, token: str, session_id: uuid.UUID) -> bool:
+        key = (hashlib.sha256(token.encode()).hexdigest(), session_id)
         now = self._clock()
-        hit = self._cache.get(key)
-        if hit is not None and hit[1] > now:
-            return hit[0]
-        async with self._pool.connection() as conn:
-            candidates = await bindings.active_session_ids(conn)
-        session_id = None
-        for candidate in candidates:
-            if await self._verify(candidate, token):
-                session_id = candidate
-                break
-        if session_id is None:
-            return None
-        if len(self._cache) >= IDENTITY_CACHE_MAX:
-            self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
-        if len(self._cache) < IDENTITY_CACHE_MAX:
-            self._cache[key] = (session_id, now + self._ttl)
-        return session_id
-
-    async def _verify(self, session_id: uuid.UUID, token: str) -> bool:
-        path = f"/api/v1/sessions/{session_id}/agent-token/verify"
+        if self._cache.get(key, 0.0) > now:
+            return True
         try:
-            # The client has no verify method yet; its request helper maps 5xx and transport
-            # errors to OrchestratorUnavailable and 404 to NotFound without echoing the body.
-            data = await self._orchestrator._request("POST", path, {"token": token})
-        except NotFound:
-            return False
-        except (OrchestratorUnavailable, OrchestratorError) as exc:
+            confirmed = await self._orchestrator.verify_agent_token(session_id, token)
+        except (OrchestratorUnavailable, OrchestratorError, ValidationError) as exc:
             raise IdentityUnavailable(type(exc).__name__) from None
-        try:
-            return uuid.UUID(str(data["session_id"])) == session_id
-        except (ValueError, KeyError, TypeError):
-            raise IdentityUnavailable("malformed verify answer") from None
+        if confirmed is None:
+            return False
+        if confirmed != session_id:
+            raise IdentityUnavailable("verify answered for another session")
+        if len(self._cache) >= IDENTITY_CACHE_MAX:
+            self._cache = {k: v for k, v in self._cache.items() if v > now}
+        if len(self._cache) < IDENTITY_CACHE_MAX:
+            self._cache[key] = now + self._ttl
+        return True
 
 
-Resolver = Callable[[str], Awaitable[uuid.UUID | None]]
+Verifier = Callable[[str, uuid.UUID], Awaitable[bool]]
 
 
 class BearerSession:
-    """ASGI guard: a bearer that resolves to an orchestrator session, or 401 (503 when the
-    orchestrator cannot tell). The session id goes into the request state and the
-    Authorization header is dropped before the MCP app sees the request."""
+    """ASGI guard: a bearer plus an `X-Orch-Session` header naming the session it belongs to, or
+    401 (503 when the orchestrator cannot tell). A missing or malformed header is a 401: there
+    is no fallback. The verified session id goes into the request state and the Authorization
+    header is dropped before the MCP app sees the request."""
 
-    def __init__(self, app: Any, *, resolve: Resolver) -> None:
+    def __init__(self, app: Any, *, verify: Verifier) -> None:
         self.app = app
-        self.resolve = resolve
+        self.verify = verify
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        auth = dict(scope["headers"]).get(b"authorization", b"").decode("latin-1")
+        headers = dict(scope["headers"])
+        auth = headers.get(b"authorization", b"").decode("latin-1")
         scheme, _, token = auth.partition(" ")
         token = token.strip()
-        session_id = None
-        if scheme.lower() == "bearer" and token:
+        session_id = _session_header(headers.get(SESSION_HEADER.lower().encode(), b""))
+        verified = False
+        if scheme.lower() == "bearer" and token and session_id is not None:
             try:
-                session_id = await self.resolve(token)
+                verified = await self.verify(token, session_id)
             except IdentityUnavailable as exc:
                 log.warning("translator tools: identity unavailable: %s", exc)
                 body = {"error": "unavailable", "detail": "cannot verify the caller"}
                 await JSONResponse(body, status_code=503)(scope, receive, send)
                 return
-        if session_id is None:
-            body = {"error": "unauthorized", "detail": "a valid agent token is required"}
+        if not verified:
+            body = {
+                "error": "unauthorized",
+                "detail": f"a valid agent token and the {SESSION_HEADER} header are required",
+            }
             response = JSONResponse(body, status_code=401, headers={"WWW-Authenticate": "Bearer"})
             await response(scope, receive, send)
             return
         state = dict(scope.get("state") or {})
         state[SESSION_STATE] = session_id
-        headers = [(k, v) for k, v in scope["headers"] if k != b"authorization"]
-        await self.app({**scope, "headers": headers, "state": state}, receive, send)
+        kept = [(k, v) for k, v in scope["headers"] if k != b"authorization"]
+        await self.app({**scope, "headers": kept, "state": state}, receive, send)
+
+
+def _session_header(raw: bytes) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(raw.decode("latin-1").strip())
+    except ValueError:
+        return None
 
 
 class TranslatorTools:
@@ -270,12 +265,12 @@ def build_server(tools: TranslatorTools) -> FastMCP:
     return server
 
 
-def build_mcp_app(pool: AsyncConnectionPool, settings: Settings, resolve: Resolver):
+def build_mcp_app(pool: AsyncConnectionPool, settings: Settings, verify: Verifier):
     """The ASGI app serving both tools as stateless streamable HTTP at `/mcp`."""
     server = build_server(TranslatorTools(pool, settings))
     return server.http_app(
         path=PATH,
         stateless_http=True,
         json_response=True,
-        middleware=[Middleware(BearerSession, resolve=resolve)],
+        middleware=[Middleware(BearerSession, verify=verify)],
     )

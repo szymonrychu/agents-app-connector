@@ -111,5 +111,8 @@ def test_preset_points_the_translator_at_the_connector_mcp_server():
     assert servers["appconn"] == {
         "type": "http",
         "url": "@mcp_url",
-        "headers": {"Authorization": "Bearer ${ORCH_AGENT_TOKEN}"},
+        "headers": {
+            "Authorization": "Bearer ${ORCH_AGENT_TOKEN}",
+            "X-Orch-Session": "${ORCH_SESSION_ID}",
+        },
     }

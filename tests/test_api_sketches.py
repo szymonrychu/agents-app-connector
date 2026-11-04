@@ -371,7 +371,7 @@ async def test_plain_upload_unchanged_without_annotates(device_api, token, conn)
 
 
 async def test_annotated_upload_to_other_device_conversation_404_not_found(device_api, token, conn):
-    other = (await devices.create(conn, "sketch", "other"))[1]
+    other = (await paired(conn, "sketch", "other"))[1]
     foreign = await _conv_with_spec(device_api, other, conn)
     r = await post(device_api, token, meta(conversation_id=foreign, annotates=_annotates(1)))
     assert r.status_code == 404 and r.json()["error"] == "not_found"

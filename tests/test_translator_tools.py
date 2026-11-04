@@ -1,10 +1,13 @@
 """The translator's MCP tools: identity, auth, turn scoping, versions, feedback and caps."""
 
+import hashlib
+import json
 import uuid
 
 import httpx
 import pytest
-from helpers import only, rows
+from agents_common.orchestrator import OrchestratorClient
+from helpers import only, paired, rows
 
 from agents_app_connector.db import specs
 from agents_app_connector.translator_tools import (
@@ -106,41 +109,87 @@ async def events_of(conn, conv):
 # identity
 
 
-def me_transport(calls, status=200, body=None):
+def verify_client(calls, owner=None, status=200, body=None):
+    """An OrchestratorClient on a mock service port: `owner` is the one session that accepts the
+    token; every other session answers the orchestrator's 404 `not_found`."""
+
     def handler(request):
-        calls.append(request.headers["authorization"])
+        calls.append((request.url.path, json.loads(request.content)["token"]))
         if isinstance(status, Exception):
             raise status
-        return httpx.Response(status, json=body if body is not None else {})
+        if status != 200:
+            return httpx.Response(status, json={})
+        sid = request.url.path.split("/")[4]
+        if str(owner) != sid:
+            return httpx.Response(404, json={"error": {"code": "not_found", "message": "x"}})
+        return httpx.Response(200, json=body if body is not None else {"session_id": sid})
 
-    return httpx.MockTransport(handler)
+    return OrchestratorClient("http://orch", "svc", transport=httpx.MockTransport(handler))
 
 
-async def test_identity_resolves_and_caches_by_token():
-    sid = uuid.uuid4()
+async def bind(pool, session_id):
+    async with pool.connection() as conn:
+        device, _ = await paired(conn, name=f"d-{session_id}")
+        conv = uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO conversations (id, device_id, plugin) VALUES (%s, %s, 'sketch')",
+            (conv, device.id),
+        )
+        await conn.execute(
+            "INSERT INTO bindings (conversation_id, session_id) VALUES (%s, %s)", (conv, session_id)
+        )
+
+
+async def test_identity_valid_token_resolves_through_the_verify_route(pool):
+    sid, other = uuid.uuid4(), uuid.uuid4()
+    await bind(pool, other)
+    await bind(pool, sid)
     calls = []
-    now = {"t": 0.0}
-    client = httpx.AsyncClient(
-        base_url="http://orch-agent", transport=me_transport(calls, body={"session_id": str(sid)})
-    )
-    ident = OrchestratorIdentity(client, ttl=60, clock=lambda: now["t"])
+    client = verify_client(calls, owner=sid)
     token = "secret-token-xyz"
-    assert await ident.resolve(token) == sid
-    assert await ident.resolve(token) == sid
-    assert calls == [f"Bearer {token}"]
-    now["t"] = 61
-    assert await ident.resolve(token) == sid
-    assert len(calls) == 2
-    assert token not in repr(ident._cache)
+    assert await OrchestratorIdentity(client, pool).resolve(token) == sid
+    assert calls == [
+        (f"/api/v1/sessions/{other}/agent-token/verify", token),
+        (f"/api/v1/sessions/{sid}/agent-token/verify", token),
+    ]
     await client.aclose()
 
 
-async def test_identity_refused_token_is_none_and_not_cached():
+async def test_identity_unknown_token_is_none_and_not_cached(pool):
+    await bind(pool, uuid.uuid4())
     calls = []
-    client = httpx.AsyncClient(base_url="http://o", transport=me_transport(calls, status=401))
-    ident = OrchestratorIdentity(client)
+    client = verify_client(calls, owner=None)
+    ident = OrchestratorIdentity(client, pool)
     assert await ident.resolve("bad") is None
     assert await ident.resolve("bad") is None
+    assert len(calls) == 2
+    assert ident._cache == {}
+    await client.aclose()
+
+
+async def test_identity_without_bindings_is_none(pool):
+    calls = []
+    client = verify_client(calls)
+    assert await OrchestratorIdentity(client, pool).resolve("t") is None
+    assert calls == []
+    await client.aclose()
+
+
+async def test_identity_cache_hit_by_token_hash_expires_after_ttl(pool):
+    sid = uuid.uuid4()
+    await bind(pool, sid)
+    calls = []
+    now = {"t": 0.0}
+    client = verify_client(calls, owner=sid)
+    ident = OrchestratorIdentity(client, pool, ttl=60, clock=lambda: now["t"])
+    token = "secret-token-xyz"
+    assert await ident.resolve(token) == sid
+    assert await ident.resolve(token) == sid
+    assert len(calls) == 1
+    assert list(ident._cache) == [hashlib.sha256(token.encode()).hexdigest()]
+    assert token not in repr(ident._cache)
+    now["t"] = 61
+    assert await ident.resolve(token) == sid
     assert len(calls) == 2
     await client.aclose()
 
@@ -149,15 +198,19 @@ async def test_identity_refused_token_is_none_and_not_cached():
     ("status", "body"),
     [
         (500, {}),
+        (401, {}),
         (200, {"nope": 1}),
         (200, {"session_id": "not-a-uuid"}),
         (httpx.ConnectError("x"), None),
     ],
 )
-async def test_identity_failure_is_unavailable(status, body):
-    client = httpx.AsyncClient(base_url="http://o", transport=me_transport([], status, body))
-    with pytest.raises(IdentityUnavailable):
-        await OrchestratorIdentity(client).resolve("t")
+async def test_identity_failure_is_unavailable(pool, status, body):
+    sid = uuid.uuid4()
+    await bind(pool, sid)
+    client = verify_client([], owner=sid, status=status, body=body)
+    with pytest.raises(IdentityUnavailable) as err:
+        await OrchestratorIdentity(client, pool).resolve("tok-abc")
+    assert "tok-abc" not in str(err.value)
     await client.aclose()
 
 

@@ -2,8 +2,9 @@
 
 The sketch-translator session reaches it through the preset's `wrapper.mcp_servers` entry with
 its own orchestrator agent token as bearer. The connector resolves that token to a session id
-with `GET /agent/v1/me` on the orchestrator agent port (cached by the token's sha256, never
-logged or stored), then to the in-progress first or follow run of the conversation bound to that
+with `POST /api/v1/sessions/{id}/agent-token/verify` on the orchestrator service port, against
+the sessions of its active bindings (cached by the token's sha256, never logged or stored),
+then to the in-progress first or follow run of the conversation bound to that
 session. A session with no such run gets the tool error `no_active_turn`, so a translator can
 write only into its own conversation, and only while one of its turns is running.
 
@@ -20,7 +21,12 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
-import httpx
+from agents_common.orchestrator import (
+    NotFound,
+    OrchestratorClient,
+    OrchestratorError,
+    OrchestratorUnavailable,
+)
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
@@ -29,7 +35,7 @@ from pydantic import Field
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 
-from agents_app_connector.db import conversations, events, feedback, inbound, runs, specs
+from agents_app_connector.db import bindings, conversations, events, feedback, inbound, runs, specs
 from agents_app_connector.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -72,19 +78,24 @@ class IdentityUnavailable(Exception):
 
 
 class OrchestratorIdentity:
-    """Resolve an agent bearer token to its session id with `GET /agent/v1/me`.
+    """Resolve an agent bearer token to its session id through the orchestrator service port.
 
-    Answers are cached for `ttl` seconds by the token's sha256; a refused token is not cached.
+    The token goes to `POST /api/v1/sessions/{id}/agent-token/verify` (service-token client) for
+    each session of an active binding until one answers 200; 404 means that session does not own
+    the token. Answers are cached for `ttl` seconds by the token's sha256; a refused token is not
+    cached. The token is only ever sent in the request body, never logged or stored.
     """
 
     def __init__(
         self,
-        client: httpx.AsyncClient,
+        orchestrator: OrchestratorClient,
+        pool: AsyncConnectionPool,
         *,
         ttl: float = IDENTITY_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._client = client
+        self._orchestrator = orchestrator
+        self._pool = pool
         self._ttl = ttl
         self._clock = clock
         self._cache: dict[str, tuple[uuid.UUID, float]] = {}
@@ -95,25 +106,35 @@ class OrchestratorIdentity:
         hit = self._cache.get(key)
         if hit is not None and hit[1] > now:
             return hit[0]
-        try:
-            response = await self._client.get(
-                "/agent/v1/me", headers={"Authorization": f"Bearer {token}"}
-            )
-        except httpx.HTTPError as exc:
-            raise IdentityUnavailable(type(exc).__name__) from None
-        if response.status_code in (401, 403):
+        async with self._pool.connection() as conn:
+            candidates = await bindings.active_session_ids(conn)
+        session_id = None
+        for candidate in candidates:
+            if await self._verify(candidate, token):
+                session_id = candidate
+                break
+        if session_id is None:
             return None
-        if response.status_code != 200:
-            raise IdentityUnavailable(f"HTTP {response.status_code}")
-        try:
-            session_id = uuid.UUID(str(response.json()["session_id"]))
-        except (ValueError, KeyError, TypeError):
-            raise IdentityUnavailable("malformed /me answer") from None
         if len(self._cache) >= IDENTITY_CACHE_MAX:
             self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
         if len(self._cache) < IDENTITY_CACHE_MAX:
             self._cache[key] = (session_id, now + self._ttl)
         return session_id
+
+    async def _verify(self, session_id: uuid.UUID, token: str) -> bool:
+        path = f"/api/v1/sessions/{session_id}/agent-token/verify"
+        try:
+            # The client has no verify method yet; its request helper maps 5xx and transport
+            # errors to OrchestratorUnavailable and 404 to NotFound without echoing the body.
+            data = await self._orchestrator._request("POST", path, {"token": token})
+        except NotFound:
+            return False
+        except (OrchestratorUnavailable, OrchestratorError) as exc:
+            raise IdentityUnavailable(type(exc).__name__) from None
+        try:
+            return uuid.UUID(str(data["session_id"])) == session_id
+        except (ValueError, KeyError, TypeError):
+            raise IdentityUnavailable("malformed verify answer") from None
 
 
 Resolver = Callable[[str], Awaitable[uuid.UUID | None]]

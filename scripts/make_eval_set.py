@@ -5,7 +5,10 @@
 Deterministic (random seed 7) and independent of platform fonts: every glyph is drawn from a
 built-in stroke table with Pillow ImageDraw primitives only, with per-glyph jitter and a slight
 baseline wobble to look hand drawn. Images are 8-bit grayscale `L`, long edge 1568, except
-09-colour-shapes, which is `RGB` (black, blue and red pens).
+09-colour-shapes and 10-annotated-spec, which are `RGB` (black, blue and red pens).
+
+10-annotated-spec also writes specs/10-annotated-spec.png (the page without notes, uploaded
+first to get spec v1) and specs/10-annotated-spec.md (the text it prints).
 """
 
 from __future__ import annotations
@@ -106,6 +109,9 @@ class Sheet:
         self.img = Image.new("RGB" if rgb else "L", size, (255, 255, 255) if rgb else 255)
         self.d = ImageDraw.Draw(self.img)
         self.words: list[str] = []
+        self.base: Image.Image | None = None  # the page before the notes (annotated item)
+        self.base_md = ""
+        self.extra: dict[str, list[str]] = {}  # extra keys of the expected JSON
 
     def _j(self, amount: float) -> float:
         return self.rng.uniform(-amount, amount)
@@ -306,6 +312,37 @@ def colour_shapes(rng: random.Random) -> Sheet:
     return s
 
 
+BASE_LINES = ["BUY MILK", "BUY EGGS", "CALL BOB", "SHIP PARCEL"]
+
+
+def annotated_spec(rng: random.Random) -> Sheet:
+    """A printed spec page with blue notes: one line struck out, two added in the margin."""
+    s = Sheet(rng, rgb=True)
+    s.text(100, 80, "SHOPPING LIST", 64)
+    ys = []
+    for i, item in enumerate(BASE_LINES):
+        ys.append(260 + i * 150)
+        s.text(100, ys[-1], item, 52)
+    kept = list(
+        dict.fromkeys(w for item in BASE_LINES if item != "CALL BOB" for w in item.lower().split())
+    )
+    title_words = ["shopping", "list"]
+    s.base = s.img.copy()
+    s.base_md = "# Shopping list\n\n## Transcription\n\n" + "\n".join(
+        item.capitalize() + "\n" for item in BASE_LINES
+    )
+    s.words = []
+    s.ink = BLUE
+    strike_y = ys[2] + 26
+    s.line((90, strike_y), (90 + s.text_width("CALL BOB", 52) + 20, strike_y))
+    s.text(760, ys[0], "ADD BREAD", 48)
+    s.text(760, ys[1] + 70, "ADD BUTTER", 48)
+    s.arrow((740, ys[0] + 30), (560, ys[1] + 30))
+    s.ink = BLACK
+    s.extra = {"must_keep": title_words + kept}
+    return s
+
+
 ITEMS = [
     ("01-notes", notes, None),
     ("02-flowchart", flowchart, "flowchart"),
@@ -316,6 +353,7 @@ ITEMS = [
     ("07-rotated", rotated, None),
     ("08-mixed", mixed, "flowchart"),
     ("09-colour-shapes", colour_shapes, "flowchart"),
+    ("10-annotated-spec", annotated_spec, None),
 ]
 
 
@@ -328,8 +366,12 @@ def generate(out: Path) -> None:
         sheet = build(rng)
         sheet.img.save(out / "sketches" / f"{name}.png", "PNG")
         words = list(dict.fromkeys(sheet.words))
-        doc = {"words": words, "diagram": diagram, "min_word_recall": MIN_RECALL}
+        doc = {"words": words, "diagram": diagram, "min_word_recall": MIN_RECALL, **sheet.extra}
         (out / "expected" / f"{name}.json").write_text(json.dumps(doc, indent=2) + "\n")
+        if sheet.base is not None:
+            (out / "specs").mkdir(parents=True, exist_ok=True)
+            sheet.base.save(out / "specs" / f"{name}.png", "PNG")
+            (out / "specs" / f"{name}.md").write_text(sheet.base_md)
 
 
 def main() -> None:

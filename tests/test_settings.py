@@ -148,3 +148,35 @@ def test_pairing_defaults(monkeypatch):
 def test_pairing_settings_are_bounded(monkeypatch, name, value):
     monkeypatch.setenv(f"APPCONN_{name}", value)
     assert f"APPCONN_{name}" in problems()
+
+
+def test_translator_tool_defaults():
+    s = load_settings(Settings)
+    assert s.orchestrator_agent_url is None and s.mcp_port == 8002
+    assert (s.max_document_bytes, s.max_feedback_per_run) == (262144, 30)
+
+
+@pytest.mark.parametrize("port", ["8000", "8001"])
+def test_mcp_port_must_differ(monkeypatch, port):
+    monkeypatch.setenv("APPCONN_MCP_PORT", port)
+    assert "must differ" in problems()["APPCONN_MCP_PORT"]
+
+
+@pytest.mark.parametrize("bad", ["orch:8001", "ftp://orch", "/agent"])
+def test_orchestrator_agent_url_must_be_absolute_http(monkeypatch, bad):
+    monkeypatch.setenv("APPCONN_ORCHESTRATOR_AGENT_URL", bad)
+    assert "absolute http" in problems()["APPCONN_ORCHESTRATOR_AGENT_URL"]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MAX_DOCUMENT_BYTES", "1023"),
+        ("MAX_DOCUMENT_BYTES", "1048577"),
+        ("MAX_FEEDBACK_PER_RUN", "0"),
+        ("MAX_FEEDBACK_PER_RUN", "201"),
+    ],
+)
+def test_translator_tool_limits_are_bounded(monkeypatch, name, value):
+    monkeypatch.setenv(f"APPCONN_{name}", value)
+    assert f"APPCONN_{name}" in problems()

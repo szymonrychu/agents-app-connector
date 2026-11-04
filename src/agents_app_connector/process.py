@@ -1,4 +1,5 @@
-"""The `app` process: device API, dispatch worker, reply tracker and retention in one process.
+"""The `app` process: device API, translator tools (MCP), dispatch worker, reply tracker and
+retention in one process.
 
 One replica only: the rate limiter is in-process and the loops run under a Postgres advisory
 lock, so a second instance waits for the first to stop instead of working in parallel.
@@ -20,12 +21,14 @@ from agents_app_connector.serve import serve_asgi
 from agents_app_connector.settings import Settings
 from agents_app_connector.storage import AttachmentStore
 from agents_app_connector.tracker import Tracker
+from agents_app_connector.translator_tools import OrchestratorIdentity, build_mcp_app
 from agents_app_connector.worker import Worker
 
 log = logging.getLogger(__name__)
 
 SINGLETON_KEY = "agents-app-connector-app"
 TASKBOARD_TIMEOUT_SECONDS = 10.0
+IDENTITY_TIMEOUT_SECONDS = 10.0
 
 
 async def _loop(name: str, unit, interval: float, stop: asyncio.Event) -> None:
@@ -46,6 +49,8 @@ async def run_app(
     stop: asyncio.Event,
 ) -> None:
     """Serve until `stop` is set. An injected `orchestrator` is not closed here."""
+    if not settings.orchestrator_agent_url:
+        raise ValueError("APPCONN_ORCHESTRATOR_AGENT_URL is required by the app process")
     pool = await open_pool(settings.database_url.get_secret_value())
     owned = orchestrator is None
     if orchestrator is None:
@@ -57,12 +62,16 @@ async def run_app(
         if settings.taskboard_url
         else None
     )
+    identity_client = httpx.AsyncClient(
+        base_url=settings.orchestrator_agent_url, timeout=IDENTITY_TIMEOUT_SECONDS
+    )
     try:
         store = AttachmentStore(settings.data_dir)
         plugins = list(REGISTRY.values())
         app = create_device_app(
             pool, settings, plugins, store, orchestrator=orchestrator, taskboard=taskboard
         )
+        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(identity_client).resolve)
         units = {
             "worker": Worker(orchestrator, pool, settings, store),
             "tracker": Tracker(orchestrator, pool, settings),
@@ -74,24 +83,27 @@ async def run_app(
                 asyncio.create_task(_loop(name, unit, settings.poll_seconds, stop), name=name)
                 for name, unit in units.items()
             ]
-            server = asyncio.create_task(
-                serve_asgi(
-                    app,
-                    settings.http_host,
-                    settings.device_port,
-                    settings.shutdown_grace_seconds,
-                    stop,
-                ),
-                name="device-api",
-            )
+            servers = [
+                asyncio.create_task(
+                    serve_asgi(
+                        asgi, settings.http_host, port, settings.shutdown_grace_seconds, stop
+                    ),
+                    name=name,
+                )
+                for name, asgi, port in (
+                    ("device-api", app, settings.device_port),
+                    ("translator-tools", mcp_app, settings.mcp_port),
+                )
+            ]
             try:
-                await asyncio.wait({server}, return_when=asyncio.FIRST_COMPLETED)
+                await asyncio.wait(servers, return_when=asyncio.FIRST_COMPLETED)
                 stop.set()
-                await server
+                await asyncio.gather(*servers)
             finally:
                 stop.set()
                 await asyncio.gather(*tasks, return_exceptions=True)
     finally:
+        await identity_client.aclose()
         if taskboard is not None:
             await taskboard.aclose()
         if owned:

@@ -152,3 +152,22 @@ async def has_other_run(
         (str(session_id), conversation_id, exclude_run_id),
     )
     return (await cur.fetchone())[0]
+
+
+async def active_translator_run(
+    conn: psycopg.AsyncConnection, session_id: uuid.UUID | str
+) -> RunRow | None:
+    """The in-progress first or follow run of the open conversation bound to the session, locked
+    until the caller's transaction ends; None when the session has no running turn."""
+    cols = ", ".join(f"r.{c.strip()}" for c in COLUMNS.split(","))
+    async with conn.cursor(row_factory=class_row(RunRow)) as cur:
+        await cur.execute(
+            f"SELECT {cols} FROM runs r "
+            "JOIN bindings b ON b.conversation_id = r.conversation_id "
+            "AND b.released_at IS NULL AND b.session_id = r.session_id "
+            "JOIN conversations c ON c.id = r.conversation_id AND c.state = 'open' "
+            "WHERE r.session_id = %s::uuid AND r.status = 'in-progress' "
+            "AND r.kind IN ('first', 'follow') ORDER BY r.id DESC LIMIT 1 FOR UPDATE OF r",
+            (str(session_id),),
+        )
+        return await cur.fetchone()

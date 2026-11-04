@@ -50,6 +50,10 @@ class Settings(BaseServiceSettings):
     pairing_ip_per_minute: int = Field(5, ge=1)
     pairing_global_per_minute: int = Field(30, ge=1)
     trusted_proxy_cidrs: CsvList = []
+    orchestrator_agent_url: str | None = None
+    mcp_port: int = 8002
+    max_document_bytes: int = Field(262144, ge=1024, le=1048576)
+    max_feedback_per_run: int = Field(30, ge=1, le=200)
 
     @property
     def max_body_bytes(self) -> int:
@@ -65,9 +69,9 @@ class Settings(BaseServiceSettings):
                 raise ValueError(f"{_var(info)}::not a CIDR: {item!r}") from None
         return value
 
-    @field_validator("taskboard_url")
+    @field_validator("taskboard_url", "orchestrator_agent_url")
     @classmethod
-    def _taskboard_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+    def _http_url(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None:
             return None
         parts = urlsplit(value)
@@ -107,6 +111,8 @@ class Settings(BaseServiceSettings):
     def _device_port_differs(self):
         if self.device_port == self.http_port:
             raise ValueError("APPCONN_DEVICE_PORT::must differ from APPCONN_HTTP_PORT")
+        if self.mcp_port in (self.http_port, self.device_port):
+            raise ValueError("APPCONN_MCP_PORT::must differ from the admin and device ports")
         return self
 
     def trusted_proxy_networks(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:

@@ -72,6 +72,11 @@ spec:
             - name: http
               containerPort: {{ $cfg.port }}
               protocol: TCP
+            {{- if $isApp }}
+            - name: mcp
+              containerPort: {{ $cfg.mcpPort }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

@@ -44,6 +44,32 @@ class PageMeta(BaseModel):
     canvas: Canvas
 
 
+class AnnotatedPage(BaseModel):
+    """One uploaded page of an annotation: its upload index, document page and source lines."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(ge=0)
+    doc_page: int = Field(ge=0)
+    lines: tuple[int, int]
+
+    @model_validator(mode="after")
+    def _ordered(self):
+        first, last = self.lines
+        if first < 0 or last < first:
+            raise ValueError("lines must be two ints with 0 <= a <= b")
+        return self
+
+
+class Annotates(BaseModel):
+    """Marks an upload as handwritten notes over a stored spec version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec_version: int = Field(ge=1)
+    pages: list[AnnotatedPage] = Field(min_length=1)
+
+
 class SketchMeta(BaseModel):
     """The `meta` form field of a sketch upload."""
 
@@ -54,6 +80,7 @@ class SketchMeta(BaseModel):
     conversation_id: uuid.UUID | None = None
     caption: str | None = Field(default=None, max_length=500)
     pages: list[PageMeta] = Field(min_length=1)
+    annotates: Annotates | None = None
 
     @model_validator(mode="after")
     def _consistent(self):
@@ -61,6 +88,13 @@ class SketchMeta(BaseModel):
             raise ValueError("page indices must be unique")
         if self.conversation_id is not None and self.conversation == "new":
             raise ValueError("conversation_id cannot be combined with conversation=new")
+        if self.annotates is not None:
+            if self.conversation_id is None:
+                raise ValueError("annotates requires conversation_id")
+            indices = {p.page for p in self.pages}
+            annotated = [p.page for p in self.annotates.pages]
+            if len(set(annotated)) != len(annotated) or not set(annotated) <= indices:
+                raise ValueError("annotates.pages must be unique indices of meta.pages")
         return self
 
 

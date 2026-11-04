@@ -137,3 +137,10 @@ def test_main_requires_token(monkeypatch, capsys):
     monkeypatch.delenv("ORCH_AGENT_TOKEN", raising=False)
     assert ensure.main(["--base-url", BASE]) == 1
     assert "ORCH_AGENT_TOKEN" in capsys.readouterr().err
+
+
+def test_preset_prompt_contains_annotated_spec_rule():
+    text = load_preset()["spec"]["wrapper"]["system_append"]
+    for phrase in ("Annotated spec", "strike-through", "Open questions", "unannotated"):
+        assert phrase in text
+    assert ensure.__name__ == "ensure_preset"

@@ -39,6 +39,15 @@ class TurnFile:
 
 
 @dataclass(frozen=True)
+class AnnotatedPage:
+    """One uploaded page of an annotation turn: its upload index, document page, source lines."""
+
+    page: int
+    doc_page: int
+    lines: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class TurnInput:
     kind: Literal["sketch", "message"]
     first: bool
@@ -48,6 +57,8 @@ class TurnInput:
     text: str | None
     files: Sequence[TurnFile]
     previous_spec: tuple[int, str] | None
+    annotated_spec: tuple[int, str] | None = None
+    annotated_pages: Sequence[AnnotatedPage] = ()
 
 
 class ClientPlugin(Protocol):

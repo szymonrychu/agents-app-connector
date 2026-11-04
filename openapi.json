@@ -204,7 +204,7 @@
       "SketchUpload": {
         "properties": {
           "meta": {
-            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}}]}. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png.",
+            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}}], \"annotates\"?: {\"spec_version\": int >= 1, \"pages\": [{\"page\": int, \"doc_page\": int, \"lines\": [int, int]}]}}. annotates needs conversation_id and answers 404 no_spec when that spec version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png.",
             "type": "string"
           },
           "sketch.0.png": {
@@ -1512,6 +1512,16 @@
               }
             },
             "description": "missing, unknown, revoked or other-plugin bearer token (unauthorized)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such conversation, attachment or device (not_found, no_spec, unknown_session)"
           },
           "409": {
             "content": {

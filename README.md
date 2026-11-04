@@ -53,6 +53,15 @@ unknown or foreign) and cannot be combined with `conversation: "new"`. 202 `{ske
 conversation_id, status: "queued"}`. 413 `too_large` or `quota_exceeded`, 422 `invalid_request`
 (also a missing png, an unknown field name or a png without a `pages` entry).
 
+`meta.annotates` (optional, needs `conversation_id`) marks the upload as handwritten notes over a
+stored spec version: `{spec_version, pages: [{page, doc_page, lines: [a, b]}]}`, where `spec_version`
+is at least 1, each `page` is a unique index of `meta.pages`, `doc_page` is the page of the rendered
+document and `lines` the source line range (0 <= a <= b) of that page. 422 `invalid_request` when
+it is malformed or has no `conversation_id`; 404 `no_spec` when that spec version does not exist
+in the conversation. The field is part of the idempotency fingerprint. The agent always gets spec
+version `spec_version` in full with the page images ("Annotated spec" prompt rule), on first and
+follow runs alike, and returns the next version; any existing version may be annotated.
+
 ### `GET /app/v1/sketch/conversations`
 
 The device's conversations: `[{id, title, created_at, latest_spec_version}]`.

@@ -88,3 +88,72 @@ def test_system_append_explains_colours_and_shapes():
     ):
         assert word in text
     text.encode("ascii")
+
+
+def _annotated_turn(files, **kw):
+    from agents_app_connector.plugins import AnnotatedPage
+
+    base = dict(
+        annotated_spec=(2, "# Login\n\nBody text\n"),
+        annotated_pages=[
+            AnnotatedPage(page=0, doc_page=3, lines=(4, 9)),
+            AnnotatedPage(page=1, doc_page=4, lines=(10, 15)),
+        ],
+        files=files,
+        caption="Handwritten notes over spec v2",
+        previous_spec=None,
+    )
+    base.update(kw)
+    return make_turn(**base)
+
+
+def test_annotation_prompt_snapshot():
+    files = _page_files(0, 1)
+    ids = [f.attachment_id for f in files if f.kind == "sketch_png"]
+    p = PLUGIN.render_prompt(_annotated_turn(files))
+    assert p == (
+        f"Image 1: sketch-{ids[0]}.png (spec v2, document page 3, source lines 4-9)\n"
+        f"Image 2: sketch-{ids[1]}.png (spec v2, document page 4, source lines 10-15)\n\n"
+        "These images are spec version 2 rendered as pages with the user's handwritten notes "
+        "over them. Printed text is the spec; handwriting, marks and shapes are the notes. "
+        "Apply the notes to spec version 2 and return the full revised spec.\n\n"
+        "Caption: Handwritten notes over spec v2\n\n"
+        "Spec version 2:\n```markdown\n# Login\n\nBody text\n```\n\n"
+        "Reply with only the markdown spec."
+    )
+
+
+def test_annotation_prompt_omits_previous_spec_block():
+    p = PLUGIN.render_prompt(_annotated_turn(_page_files(0, 1), previous_spec=(3, "# Newer")))
+    assert "Previous spec version" not in p and "# Newer" not in p
+    assert "Spec version 2:" in p
+
+
+def test_annotation_prompt_follow_turn_still_carries_spec():
+    p = PLUGIN.render_prompt(_annotated_turn(_page_files(0, 1), first=False))
+    assert "Spec version 2:" in p and "source lines 4-9" in p
+
+
+def test_annotation_prompt_page_without_mapping_falls_back_to_page_index():
+    files = _page_files(0, 5)
+    p = PLUGIN.render_prompt(_annotated_turn(files))
+    assert "(page 5)" in p and "source lines 4-9" in p
+
+
+def test_plain_prompts_unchanged_by_annotation_support():
+    t = make_turn()
+    aid = t.files[0].attachment_id
+    assert PLUGIN.render_prompt(t) == (
+        f"Image 1: sketch-{aid}.png (page 0)\n\nCaption: login screen\n\n"
+        "Reply with only the markdown spec."
+    )
+    m = make_turn(kind="message", first=False, files=[], caption=None, text="x")
+    assert PLUGIN.render_prompt(m) == "User feedback: x\n\nReply with only the markdown spec."
+
+
+def test_system_append_has_annotated_spec_rule():
+    from agents_app_connector.plugins.sketch import load_preset
+
+    text = load_preset()["spec"]["wrapper"]["system_append"]
+    assert "Annotated spec" in text and "strike-through" in text and "Open questions" in text
+    text.encode("ascii")

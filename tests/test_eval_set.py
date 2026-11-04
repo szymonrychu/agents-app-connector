@@ -20,8 +20,11 @@ NAMES = [
     "07-rotated",
     "08-mixed",
     "09-colour-shapes",
+    "10-annotated-spec",
 ]
 COLOUR = "09-colour-shapes"
+ANNOTATED = "10-annotated-spec"
+RGB_ITEMS = (COLOUR, ANNOTATED)
 
 
 def load(name):
@@ -46,7 +49,7 @@ def test_eval_set_regenerates_identically(tmp_path):
             Image.open(tmp_path / "sketches" / f"{name}.png") as new,
             Image.open(ROOT / "eval" / "sketches" / f"{name}.png") as old,
         ):
-            assert new.mode == old.mode == ("RGB" if name == COLOUR else "L")
+            assert new.mode == old.mode == ("RGB" if name in RGB_ITEMS else "L")
             assert new.size == old.size
             assert new.tobytes() == old.tobytes()
         assert (tmp_path / "expected" / f"{name}.json").read_bytes() == (
@@ -57,7 +60,7 @@ def test_eval_set_regenerates_identically(tmp_path):
 def test_colour_item_is_rgb_and_others_grayscale():
     for name in NAMES:
         with Image.open(ROOT / "eval" / "sketches" / f"{name}.png") as im:
-            assert im.mode == ("RGB" if name == COLOUR else "L"), name
+            assert im.mode == ("RGB" if name in RGB_ITEMS else "L"), name
     with Image.open(ROOT / "eval" / "sketches" / f"{COLOUR}.png") as im:
         r, g, b = (im.getchannel(i).getextrema()[0] for i in range(3))
         assert min(r, g, b) < 100  # inked in red or blue, not only gray
@@ -74,6 +77,37 @@ def test_items_valid_for_upload():
         assert expected["min_word_recall"] == 0.8
 
 
+def test_annotated_item_regenerates_identically_with_base_page_and_spec(tmp_path):
+    make.generate(tmp_path)
+    for rel in ("specs/10-annotated-spec.md", "specs/10-annotated-spec.png"):
+        new = (tmp_path / rel).read_bytes() if rel.endswith(".md") else None
+        if new is not None:
+            assert new == (ROOT / "eval" / rel).read_bytes()
+        else:
+            with (
+                Image.open(tmp_path / rel) as a,
+                Image.open(ROOT / "eval" / rel) as b,
+            ):
+                assert a.mode == b.mode == "RGB" and a.size == b.size
+                assert a.tobytes() == b.tobytes()
+    assert not (tmp_path / "specs" / "01-notes.md").exists()
+    # the annotated page is the base page plus ink
+    with (
+        Image.open(ROOT / "eval" / "specs" / "10-annotated-spec.png") as base,
+        Image.open(ROOT / "eval" / "sketches" / "10-annotated-spec.png") as page,
+    ):
+        assert base.size == page.size and base.tobytes() != page.tobytes()
+
+
+def test_annotated_item_expected_has_must_keep():
+    exp = json.loads((ROOT / "eval" / "expected" / "10-annotated-spec.json").read_text())
+    assert exp["must_keep"] and exp["words"]
+    assert not set(exp["must_keep"]) & {"call", "bob"}  # struck out in the page
+    for name in NAMES[:-1]:
+        other = json.loads((ROOT / "eval" / "expected" / f"{name}.json").read_text())
+        assert "must_keep" not in other
+
+
 FRONT = (
     "---\nid: abc\nsource_image: sketch-abc.png\ncreated: 2026-11-02T10:00:00Z\n"
     "confidence: high\nunreadable_count: 0\n---\n# Title\n\n"
@@ -86,6 +120,23 @@ def test_score_spec_recall_and_markers():
     assert s.recall == 0.75
     assert s.diagram_ok is True
     assert s.front_matter is True
+
+
+def test_score_must_keep_missing_is_reported():
+    exp = {
+        "words": ["bread"],
+        "must_keep": ["milk", "eggs", "ship"],
+        "diagram": None,
+        "min_word_recall": 0.8,
+    }
+    s = ev.score(FRONT + "Buy milk\nAdd bread\nShip parcel\n", exp)
+    assert s.recall == 1.0
+    assert s.lost == ["eggs"]
+    assert round(s.kept, 3) == 0.667
+    clean = ev.score(FRONT + "milk eggs ship bread", exp)
+    assert clean.lost == [] and clean.kept == 1.0
+    none = ev.score(FRONT + "x", {"words": [], "diagram": None, "min_word_recall": 0.8})
+    assert none.kept == 1.0 and none.lost == []
 
 
 def test_score_spec_diagrams():
@@ -148,3 +199,34 @@ def test_run_item_deletes_conversation_on_failure():
     result = ev.run_item(client, "http://x", "01-notes", 5)
     assert result["error"] == "ConnectError"
     assert ("DELETE", "/conversations/c1") in calls
+
+
+def test_run_item_annotated_uploads_base_then_annotation():
+    import httpx
+
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request.content)
+            return httpx.Response(202, json={"conversation_id": "c1"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if request.url.path.endswith("/events"):
+            done = {"type": "sketch_status", "status": "done"}
+            return httpx.Response(200, json={"cursor": 2, "events": [done, done]})
+        return httpx.Response(200, text="---\nid: a\n---\n# T\n\nBuy milk\n")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = ev.run_item(client, "http://x", ANNOTATED, 5)
+    assert len(posts) == 2
+    assert b"annotates" not in posts[0] and b'"conversation": "new"' in posts[0]
+    assert b'"annotates"' in posts[1] and b'"spec_version": 1' in posts[1]
+    assert b'"conversation_id": "c1"' in posts[1] and b'"lines": [0, 5]' in posts[1]
+    assert result["status"] == "done" and "kept" in result
+
+
+def test_run_item_plain_item_uploads_once():
+    client, calls = _item_client([{"type": "sketch_status", "status": "done"}])
+    ev.run_item(client, "http://x", "01-notes", 5)
+    assert [c for c in calls if c[0] == "POST"] == [("POST", "/sketches")]

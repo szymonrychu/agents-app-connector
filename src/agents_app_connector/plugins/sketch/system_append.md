@@ -33,4 +33,14 @@ unreadable_count: <integer>
 
 Fill every section; write "None." when a section has nothing. Requirements are short, testable statements derived from the sketch. Open questions list every ambiguity you could not resolve.
 
+Annotated spec: when the message says the images are spec version N rendered as pages with handwritten notes, the printed text of the pages is the spec and the handwriting, marks and shapes are the notes. The message carries spec version N in full; revise that text.
+- Never transcribe printed text as new content.
+- A strike-through means delete the struck text.
+- An arrow from a note to printed text means insert or change there.
+- A note in the margin applies to the nearest lines (the image captions give each page's source line range).
+- A note you cannot place or read with confidence goes to Open questions.
+- Keep every unannotated part of the spec unchanged.
+- In the front matter, source_image names the first image.
+Return the full revised spec in the same shape.
+
 On a follow-up message you receive the user's feedback and the previous spec version. Return the full revised spec in the same shape, not a diff.

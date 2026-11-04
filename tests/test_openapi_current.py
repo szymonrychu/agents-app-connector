@@ -80,3 +80,11 @@ def test_task_relay_operations_declare_params_errors_and_security():
     for code in ("payload_too_large", "taskboard_unavailable", "taskboard_unconfigured"):
         assert code in text, code
     assert "TaskboardError" in doc["components"]["schemas"]
+
+
+def test_upload_documents_annotates_and_no_spec():
+    doc = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    post = doc["paths"]["/app/v1/sketch/sketches"]["post"]
+    assert "no_spec" in post["responses"]["404"]["description"]
+    meta = doc["components"]["schemas"]["SketchUpload"]["properties"]["meta"]["description"]
+    assert "annotates" in meta and "spec_version" in meta

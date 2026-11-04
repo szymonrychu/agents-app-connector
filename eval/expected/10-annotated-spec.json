@@ -1,0 +1,18 @@
+{
+  "words": [
+    "add",
+    "bread",
+    "butter"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8,
+  "must_keep": [
+    "shopping",
+    "list",
+    "buy",
+    "milk",
+    "eggs",
+    "ship",
+    "parcel"
+  ]
+}

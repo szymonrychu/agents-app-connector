@@ -288,3 +288,78 @@ async def test_config_reports_page_limits(device_api, token):
         8388608,
         200,
     )
+
+
+async def _conv_with_spec(device_api, token, conn, version=1):
+    cid = (await post(device_api, token, meta(conversation="new"))).json()["conversation_id"]
+    for v in range(1, version + 1):
+        await conn.execute(
+            "INSERT INTO specs (conversation_id, version, markdown) VALUES (%s, %s, %s)",
+            (cid, v, f"# spec {v}"),
+        )
+    return cid
+
+
+def _annotates(version=1):
+    return {"spec_version": version, "pages": [{"page": 0, "doc_page": 0, "lines": [0, 4]}]}
+
+
+async def test_annotated_upload_unknown_spec_404_no_spec(device_api, token, conn, store):
+    cid = await _conv_with_spec(device_api, token, conn)
+    before = (await count(conn, "inbound"), len(stored_files(store)))
+    r = await post(device_api, token, meta(conversation_id=cid, annotates=_annotates(2)))
+    assert r.status_code == 404 and r.json()["error"] == "no_spec"
+    assert r.json()["detail"] == "no such spec version"
+    assert (await count(conn, "inbound"), len(stored_files(store))) == before
+
+
+async def test_annotated_upload_accepted_when_spec_exists(device_api, token, conn):
+    cid = await _conv_with_spec(device_api, token, conn, version=2)
+    r = await post(device_api, token, meta(conversation_id=cid, annotates=_annotates(1)))
+    assert r.status_code == 202
+    stored = (
+        await (
+            await conn.execute("SELECT meta FROM inbound WHERE id = %s", (r.json()["sketch_id"],))
+        ).fetchone()
+    )[0]
+    assert stored["annotates"] == _annotates(1)
+
+
+async def test_replay_same_client_id_same_annotates_200(device_api, token, conn):
+    cid = await _conv_with_spec(device_api, token, conn)
+    m = meta(conversation_id=cid, annotates=_annotates(1))
+    first = await post(device_api, token, m)
+    second = await post(device_api, token, m)
+    assert first.status_code == 202 and second.status_code == 200
+    assert second.json() == first.json()
+
+
+async def test_replay_with_different_annotates_422_idempotency_mismatch(device_api, token, conn):
+    cid = await _conv_with_spec(device_api, token, conn, version=2)
+    base = json.loads(meta(conversation_id=cid, annotates=_annotates(1)))
+    assert (await post(device_api, token, json.dumps(base))).status_code == 202
+    other = {**base, "annotates": _annotates(2)}
+    r = await post(device_api, token, json.dumps(other))
+    assert r.status_code == 422 and r.json()["error"] == "idempotency_mismatch"
+    plain = {k: v for k, v in base.items() if k != "annotates"}
+    r = await post(device_api, token, json.dumps(plain))
+    assert r.status_code == 422 and r.json()["error"] == "idempotency_mismatch"
+
+
+async def test_plain_upload_unchanged_without_annotates(device_api, token, conn):
+    cid = await _conv_with_spec(device_api, token, conn)
+    r = await post(device_api, token, meta(conversation_id=cid))
+    assert r.status_code == 202
+    stored = (
+        await (
+            await conn.execute("SELECT meta FROM inbound WHERE id = %s", (r.json()["sketch_id"],))
+        ).fetchone()
+    )[0]
+    assert stored["annotates"] is None
+
+
+async def test_annotated_upload_to_other_device_conversation_404_not_found(device_api, token, conn):
+    other = (await devices.create(conn, "sketch", "other"))[1]
+    foreign = await _conv_with_spec(device_api, other, conn)
+    r = await post(device_api, token, meta(conversation_id=foreign, annotates=_annotates(1)))
+    assert r.status_code == 404 and r.json()["error"] == "not_found"

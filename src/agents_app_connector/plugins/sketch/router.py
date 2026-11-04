@@ -190,6 +190,10 @@ def build_router(deps: PluginDeps) -> APIRouter:
                     if owned_row is None:
                         raise ApiError(404, "not_found", "conversation not found")
                     conversation_id = meta.conversation_id
+                    if meta.annotates is not None and (
+                        await specs.get(conn, conversation_id, meta.annotates.spec_version) is None
+                    ):
+                        raise ApiError(404, "no_spec", "no such spec version")
                 elif meta.conversation == "new":
                     conversation_id = await conversations.create(conn, device.id, PLUGIN_ID)
                 else:

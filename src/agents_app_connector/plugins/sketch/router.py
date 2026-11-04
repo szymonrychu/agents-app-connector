@@ -18,7 +18,7 @@ from agents_app_connector import clock
 from agents_app_connector.api.auth import active_device, device_auth
 from agents_app_connector.api.errors import ApiError
 from agents_app_connector.api.schemas import MessageIn, SketchMeta
-from agents_app_connector.db import attachments, conversations, events, inbound, specs
+from agents_app_connector.db import attachments, conversations, events, feedback, inbound, specs
 from agents_app_connector.db.devices import DeviceRow
 from agents_app_connector.images import validate_png, validate_strokes
 from agents_app_connector.plugins import PluginDeps
@@ -274,6 +274,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
                 "title": r.title,
                 "created_at": r.created_at.isoformat(),
                 "latest_spec_version": r.latest_spec_version,
+                "latest_feedback_id": r.latest_feedback_id,
             }
             for r in rows
         ]
@@ -292,6 +293,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
             await conversations.mark_deleted(conn, conversation_id)
             await inbound.fail_queued_for(conn, conversation_id, "conversation_deleted")
             await specs.delete_for(conn, conversation_id)
+            await feedback.delete_for(conn, conversation_id)
             paths = await attachments.delete_for_conversation(conn, conversation_id)
         for path in paths:
             await asyncio.to_thread(store.delete, path)
@@ -418,6 +420,27 @@ def build_router(deps: PluginDeps) -> APIRouter:
     @router.get("/conversations/{conversation_id}/spec/{version}")
     async def spec_version(conversation_id: Conversation, version: int) -> dict:
         return spec_json(await spec_row(conversation_id, version))
+
+    @router.get("/conversations/{conversation_id}/feedback")
+    async def list_feedback(
+        conversation_id: Conversation, after: Annotated[int, Query(ge=0)] = 0
+    ) -> dict:
+        async with pool.connection() as conn:
+            rows = await feedback.after(conn, conversation_id, after)
+        return {
+            "items": [
+                {
+                    "id": r.id,
+                    "kind": r.kind,
+                    "text": r.text,
+                    "where": r.where_text,
+                    "spec_version": r.spec_version,
+                    "created_at": r.created_at.isoformat(),
+                }
+                for r in rows
+            ],
+            "cursor": rows[-1].id if rows else after,
+        }
 
     @router.get("/attachments/{attachment_id}")
     async def get_attachment(

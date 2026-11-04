@@ -153,7 +153,7 @@
       },
       "Event": {
         "additionalProperties": true,
-        "description": "type is sketch_status, spec, message or handoff; the remaining fields depend on the type (sketch_id or message_id or handoff_id, status, reason, session_slug).",
+        "description": "type is sketch_status, spec, message, handoff or feedback; the remaining fields depend on the type (sketch_id or message_id or handoff_id, status, reason, session_slug, version, feedback_id and kind).",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -167,7 +167,8 @@
               "sketch_status",
               "spec",
               "message",
-              "handoff"
+              "handoff",
+              "feedback"
             ],
             "type": "string"
           }
@@ -207,6 +208,52 @@
           "token"
         ],
         "title": "ExchangeResponse",
+        "type": "object"
+      },
+      "Feedback": {
+        "description": "Something the translator tells the user about the sketch, kept apart from the document. spec_version is the version written by the same turn, null when the turn wrote none.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "question",
+              "uncertain",
+              "illegible",
+              "note"
+            ],
+            "type": "string"
+          },
+          "spec_version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "where": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "text",
+          "where",
+          "spec_version",
+          "created_at"
+        ],
+        "title": "Feedback",
         "type": "object"
       },
       "HandoffIn": {
@@ -805,6 +852,12 @@
                         "format": "uuid",
                         "type": "string"
                       },
+                      "latest_feedback_id": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
                       "latest_spec_version": {
                         "type": [
                           "integer",
@@ -1067,6 +1120,103 @@
           }
         ],
         "summary": "Poll events after a cursor"
+      }
+    },
+    "/app/v1/sketch/conversations/{conversation_id}/feedback": {
+      "get": {
+        "operationId": "list_feedback_app_v1_sketch_conversations__conversation_id__feedback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "cursor": {
+                      "type": "integer"
+                    },
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/Feedback"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "translator feedback items after the cursor, oldest first (at most 100)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "missing, unknown, revoked or other-plugin bearer token (unauthorized)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such conversation, attachment or device (not_found, no_spec, unknown_session)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
+          }
+        },
+        "security": [
+          {
+            "deviceToken": []
+          }
+        ],
+        "summary": "Translator feedback after a cursor"
       }
     },
     "/app/v1/sketch/conversations/{conversation_id}/handoff": {

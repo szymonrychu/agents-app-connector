@@ -15,6 +15,7 @@ TABLES = {
     "holds": "writer: app",
     "specs": "writer: app",
     "events": "writer: app",
+    "feedback": "writer: app",
     "handoffs": "queue: insert by app api, transitions by app worker",
 }
 SHA = "a" * 64
@@ -117,5 +118,33 @@ async def test_constraints_and_cascade(conn):
     )
     await conn.execute("DELETE FROM conversations WHERE id = %s", (cid,))
     for t in ("inbound", "attachments", "specs"):
+        cur = await conn.execute(f"SELECT count(*) FROM {t}")  # noqa: S608
+        assert (await cur.fetchone())[0] == 0
+
+
+async def test_events_accept_feedback_type(conn):
+    cid = await _conversation(conn, await _device(conn))
+    await conn.execute(
+        "INSERT INTO events (conversation_id, type, payload) VALUES (%s, 'feedback', '{}')", (cid,)
+    )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        await conn.execute(
+            "INSERT INTO events (conversation_id, type, payload) VALUES (%s, 'other', '{}')",
+            (cid,),
+        )
+
+
+async def test_feedback_and_specs_run_id_cascade(conn):
+    cid = await _conversation(conn, await _device(conn))
+    await conn.execute(
+        "INSERT INTO specs (conversation_id, version, markdown, run_id) VALUES (%s, 1, 'a', 7)",
+        (cid,),
+    )
+    await conn.execute(
+        "INSERT INTO feedback (conversation_id, run_id, kind, text) VALUES (%s, 7, 'note', 'n')",
+        (cid,),
+    )
+    await conn.execute("DELETE FROM conversations WHERE id = %s", (cid,))
+    for t in ("specs", "feedback"):
         cur = await conn.execute(f"SELECT count(*) FROM {t}")  # noqa: S608
         assert (await cur.fetchone())[0] == 0

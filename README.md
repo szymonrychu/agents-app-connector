@@ -82,7 +82,8 @@ follow runs alike, and returns the next version; any existing version may be ann
 
 ### `GET /app/v1/sketch/conversations`
 
-The device's conversations: `[{id, title, created_at, latest_spec_version}]`.
+The device's conversations: `[{id, title, created_at, latest_spec_version,
+latest_feedback_id}]`; `latest_feedback_id` is null until the translator sent feedback.
 
 ### `POST /app/v1/sketch/conversations`
 
@@ -90,7 +91,7 @@ Create an empty conversation. 201 `{id}`.
 
 ### `DELETE /app/v1/sketch/conversations/{conversation_id}`
 
-Delete a conversation with its specs and files. 204; 404 `not_found`.
+Delete a conversation with its specs, feedback and files. 204; 404 `not_found`.
 
 ### `POST /app/v1/sketch/conversations/{conversation_id}/messages`
 
@@ -99,7 +100,8 @@ Follow-up text `{client_id, text}` that refines the spec. 202 `{message_id}`.
 ### `GET /app/v1/sketch/conversations/{conversation_id}/events`
 
 Long poll: `?after=<cursor>&wait=<seconds>`. Returns `{events: [{cursor, type, created_at,
-...}], cursor}`. Event types: `sketch_status`, `spec`, `message`, `handoff`.
+...}], cursor}`. Event types: `sketch_status`, `spec`, `message`, `handoff`, `feedback`
+(`{feedback_id, kind}`, one per item).
 
 ### `GET /app/v1/sketch/conversations/{conversation_id}/stream`
 
@@ -116,6 +118,14 @@ Latest spec as `text/markdown`.
 ### `GET /app/v1/sketch/conversations/{conversation_id}/spec/{version}`
 
 One spec version, same shape as the latest spec.
+
+### `GET /app/v1/sketch/conversations/{conversation_id}/feedback`
+
+Translator feedback, kept apart from the document: `?after=<id>` returns `{items: [{id, kind,
+text, where, spec_version, created_at}], cursor}`, oldest first, at most 100 per call. `kind` is
+`question`, `uncertain`, `illegible` or `note`; `where` is optional free text (for example
+"page 2, box Login"); `spec_version` is the version the same turn wrote, null when it wrote none.
+404 `not_found`.
 
 ### `GET /app/v1/sketch/attachments/{attachment_id}`
 

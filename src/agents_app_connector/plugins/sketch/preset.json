@@ -24,7 +24,9 @@
           "Task",
           "Agent",
           "mcp__any-mcp__*",
-          "mcp__ccw__*"
+          "mcp__ccw__*",
+          "mcp__plugin_*",
+          "mcp__claude_ai_*"
         ]
       },
       "mcp_servers": {

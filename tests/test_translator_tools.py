@@ -170,6 +170,37 @@ async def test_missing_or_unknown_bearer_is_401(mcp):
         assert r.status_code == 401 and r.json()["error"] == "unauthorized"
 
 
+async def test_authorization_header_never_reaches_fastmcp(mcp, sessions, monkeypatch):
+    from fastmcp.server import dependencies
+
+    seen = []
+    real = dependencies.get_http_request
+
+    def spy():
+        request = real()
+        seen.append(dict(request.headers))
+        return request
+
+    monkeypatch.setattr("agents_app_connector.translator_tools.get_http_request", spy)
+    sessions.tokens["secret-xyz"] = uuid.uuid4()
+    await call(mcp, "secret-xyz", "feedback_add", kind="note", text="n")
+    assert seen
+    assert all("authorization" not in h for h in seen)
+    assert all("secret-xyz" not in v for h in seen for v in h.values())
+
+
+async def test_token_never_reaches_the_logs(mcp, sessions, caplog):
+    caplog.set_level("DEBUG")
+    sessions.tokens["secret-xyz"] = uuid.uuid4()
+    await call(mcp, "secret-xyz", "feedback_add", kind="note", text="n")
+    await call(mcp, "secret-xyz", "document_write", markdown="x")
+    await rpc(mcp, "wrong-secret-abc", "tools/list")
+    sessions.down = True
+    await rpc(mcp, "secret-xyz", "tools/list")
+    assert "secret-xyz" not in caplog.text
+    assert "wrong-secret-abc" not in caplog.text
+
+
 async def test_identity_down_is_503(mcp, sessions):
     sessions.tokens["t"] = uuid.uuid4()
     sessions.down = True

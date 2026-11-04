@@ -96,6 +96,8 @@ def test_preset_is_read_only_without_network():
         "Agent",
         "mcp__any-mcp__*",
         "mcp__ccw__*",
+        "mcp__plugin_*",
+        "mcp__claude_ai_*",
     ):
         assert tool in perms["deny"]
     assert "mcp__*" not in perms["deny"]

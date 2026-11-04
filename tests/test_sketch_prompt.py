@@ -152,7 +152,7 @@ def test_plain_prompts_unchanged_by_annotation_support():
         f"Image 1: sketch-{aid}.png (page 0)\n\nCaption: login screen\n\n" + FINAL
     )
     m = make_turn(kind="message", first=False, files=[], caption=None, text="x")
-    assert PLUGIN.render_prompt(m) == "User feedback: x\n\n" + FINAL
+    assert PLUGIN.render_prompt(m) == "User notes: x\n\n" + FINAL
 
 
 def test_system_append_has_annotated_spec_rule():
@@ -168,7 +168,7 @@ def test_system_append_is_a_faithful_transcription_contract():
 
     text = load_preset()["spec"]["wrapper"]["system_append"]
     for phrase in (
-        "Agent's job is to recreate",
+        "Your job is to recreate",
         "document_write",
         "exactly once",
         "feedback_add",
@@ -193,3 +193,22 @@ def test_prompts_point_at_the_tools_never_at_the_reply():
         assert "document_write" in p and "feedback_add" in p
         assert "Reply with" not in p and "markdown spec" not in p
         assert p.isascii()
+
+
+def _system_append():
+    from agents_app_connector.plugins.sketch import load_preset
+
+    return load_preset()["spec"]["wrapper"]["system_append"]
+
+
+def test_prompt_quotes_mermaid_labels_with_colour_markers():
+    text = _system_append()
+    assert 'A["[[red]]Login[[/red]]"]' in text
+    assert "subroutine" in text
+
+
+def test_prompt_is_second_person_and_keeps_feedback_for_the_tool():
+    text = _system_append()
+    assert "the user's feedback" not in text
+    assert "the user's notes" in text
+    assert "You recreate" in text

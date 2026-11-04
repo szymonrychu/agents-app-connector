@@ -86,7 +86,7 @@ class SketchPlugin:
         if turn.caption:
             parts.append(f"Caption: {turn.caption}")
         if turn.text:
-            parts.append(f"User feedback: {turn.text}")
+            parts.append(f"User notes: {turn.text}")
         if annotated is not None:
             version, markdown = annotated
             parts.append(f"Spec version {version}:\n```markdown\n{markdown.strip()}\n```")

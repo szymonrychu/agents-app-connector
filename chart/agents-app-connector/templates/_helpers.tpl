@@ -180,6 +180,10 @@ env:
 {{- if eq .component "app" }}
   - name: APPCONN_DATA_DIR
     value: /data
+{{- with .context.Values.trustedProxyCidrs }}
+  - name: APPCONN_TRUSTED_PROXY_CIDRS
+    value: {{ join "," . | quote }}
+{{- end }}
 {{- if include "agents-app-connector.taskboardSecretName" .context }}
   - name: APPCONN_TASKBOARD_URL
     value: {{ .context.Values.taskboard.url | quote }}

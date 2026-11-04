@@ -118,3 +118,11 @@ class FakeSse:
 
     def send(self, chunk: bytes, conn: int = -1) -> None:
         self.connections[conn].put_nowait(chunk)
+
+
+async def paired(conn, plugin="sketch", name="d"):
+    """A device with an issued token: `(DeviceRow, token)`."""
+    from agents_app_connector.db import device_tokens, devices
+
+    row = await devices.create(conn, plugin, name)
+    return row, await device_tokens.issue(conn, row.id)

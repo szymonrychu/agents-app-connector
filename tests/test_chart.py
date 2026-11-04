@@ -187,6 +187,14 @@ def test_admin_pod_annotations_and_cidrs():
     assert default["APPCONN_ADMIN_ALLOWED_CIDRS"]["value"] == "127.0.0.1/32"
 
 
+def test_trusted_proxy_cidrs_reach_the_app_pod_only():
+    docs = render({"trustedProxyCidrs": ["10.42.0.0/16", "192.0.2.9/32"]})
+    env = _env(main(docs, "app"))
+    assert env["APPCONN_TRUSTED_PROXY_CIDRS"]["value"] == "10.42.0.0/16,192.0.2.9/32"
+    assert "APPCONN_TRUSTED_PROXY_CIDRS" not in _env(main(docs, "admin"))
+    assert "APPCONN_TRUSTED_PROXY_CIDRS" not in _env(main(render(), "app"))
+
+
 def test_secrets_by_reference_and_inline():
     docs = render()
     secrets = _by_name(docs, "Secret")

@@ -1,10 +1,12 @@
 """In-process token bucket per key. Valid only with a single replica (the chart enforces it)."""
 
+import ipaddress
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from starlette.datastructures import Headers
+from starlette.requests import Request
 
 from agents_app_connector.api.errors import ApiError, error_response
 
@@ -33,6 +35,29 @@ class RateLimiter:
         """Whole seconds until one token is available (at least 1)."""
         tokens, _ = self._tokens(key)
         return max(1, math.ceil((1 - tokens) / self.rate))
+
+
+def client_ip(
+    request: Request, trusted: Sequence[ipaddress.IPv4Network | ipaddress.IPv6Network]
+) -> str:
+    """The client address: `X-Real-IP` (else the rightmost `X-Forwarded-For`) only when the
+    socket peer is inside a trusted proxy network, otherwise the socket peer itself."""
+    peer = request.client.host if request.client else "unknown"
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not any(peer_ip in net for net in trusted):
+        return peer
+    forwarded = (
+        request.headers.get("x-real-ip")
+        or request.headers.get("x-forwarded-for", "").rsplit(",", 1)[-1]
+    )
+    forwarded = forwarded.strip()
+    try:
+        return str(ipaddress.ip_address(forwarded))
+    except ValueError:
+        return peer
 
 
 class BodyCap:

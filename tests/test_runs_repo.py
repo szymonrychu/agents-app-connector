@@ -1,13 +1,14 @@
 import uuid
 
 import pytest
+from helpers import paired
 
-from agents_app_connector.db import conversations, devices, events, holds, runs, specs
+from agents_app_connector.db import conversations, events, holds, runs, specs
 from agents_app_connector.run_store import AppRunStore
 
 
 async def conv(conn):
-    dev, _ = await devices.create(conn, "sketch", "d")
+    dev, _ = await paired(conn, "sketch", "d")
     return await conversations.create(conn, dev.id, "sketch")
 
 

@@ -120,3 +120,19 @@ async def test_retention_days_applies_to_rows(pool, conn, store, upload, days):
     )
     await purge(pool, store, now(), retention_days=days)
     assert await count(conn, "runs") == (0 if days == 1 else 1)
+
+
+async def test_settled_pairing_codes_age_out_and_pending_ones_stay(pool, conn, store):
+    from agents_app_connector.db import devices, pairing
+    from agents_app_connector.retention import PairingSweep
+
+    old = await devices.create(conn, "sketch", "old")
+    await pairing.issue(conn, old.id, 600, 3)
+    await conn.execute("UPDATE pairing_codes SET expires_at = now() - interval '1 second'")
+    assert await PairingSweep(pool).tick() == 1
+    await conn.execute("UPDATE pairing_codes SET created_at = now() - interval '40 days'")
+    live = await devices.create(conn, "sketch", "live")
+    await pairing.issue(conn, live.id, 600, 3)
+    await purge(pool, store, now(), retention_days=30)
+    rows = await (await conn.execute("SELECT status FROM pairing_codes")).fetchall()
+    assert rows == [("pending",)]

@@ -1,9 +1,7 @@
 import hashlib
 import uuid
 
-from helpers import bearer, png
-
-from agents_app_connector.db import devices
+from helpers import bearer, paired, png
 
 
 async def seed_spec(conn, cid, version, markdown, sketch_ids=()):
@@ -35,7 +33,7 @@ async def test_no_spec_and_foreign_conversation(device_api, token, conn, upload)
     for path in ("spec", "spec.md", "spec/1"):
         r = await device_api.get(f"/conversations/{cid}/{path}", headers=bearer(token))
         assert r.status_code == 404 and r.json()["error"] == "no_spec"
-    other = (await devices.create(conn, "sketch", "other"))[1]
+    other = (await paired(conn, "sketch", "other"))[1]
     r = await device_api.get(f"/conversations/{cid}/spec", headers=bearer(other))
     assert r.status_code == 404 and r.json()["error"] == "not_found"
 
@@ -51,7 +49,7 @@ async def test_attachment_etag_304_and_other_device_404(device_api, token, conn,
         f"/attachments/{sketch_id}", headers={**bearer(token), "If-None-Match": etag}
     )
     assert r.status_code == 304 and r.content == b""
-    other = (await devices.create(conn, "sketch", "other"))[1]
+    other = (await paired(conn, "sketch", "other"))[1]
     r = await device_api.get(f"/attachments/{sketch_id}", headers=bearer(other))
     assert r.status_code == 404 and r.json()["error"] == "not_found"
     r = await device_api.get(f"/attachments/{uuid.uuid4()}", headers=bearer(token))

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from psycopg_pool import AsyncConnectionPool
 
 from agents_app_connector.clock import utcnow
-from agents_app_connector.db import attachments
+from agents_app_connector.db import attachments, pairing
 from agents_app_connector.storage import AttachmentStore
 
 log = logging.getLogger(__name__)
@@ -34,7 +34,8 @@ async def purge(
 ) -> PurgeResult:
     """One pass. Per attachment: delete the file, then mark the row purged (a crash between the
     two is retried next pass, deleting a missing file is a no-op). Then delete events of deleted
-    conversations, finished runs and finished hand-offs older than `retention_days`."""
+    conversations, finished runs, finished hand-offs and settled pairing codes older than
+    `retention_days`."""
     cutoff = now - timedelta(days=retention_days)
     files = 0
     size = 0
@@ -59,6 +60,7 @@ async def purge(
             "DELETE FROM handoffs WHERE status IN ('handled', 'failed') AND created_at < %s",
             (cutoff,),
         )
+        await pairing.purge(conn, cutoff)
     return PurgeResult(files=files, bytes=size)
 
 
@@ -89,3 +91,15 @@ class Retention:
         result = await purge(self._pool, self._store, now, retention_days=self._retention_days)
         log.info("retention purge: %d files, %d bytes", result.files, result.bytes)
         return result
+
+
+class PairingSweep:
+    """Marks expired and superseded pairing codes on every tick (display and retention only;
+    redeeming never depends on it)."""
+
+    def __init__(self, pool: AsyncConnectionPool):
+        self._pool = pool
+
+    async def tick(self) -> int:
+        async with self._pool.connection() as conn:
+            return await pairing.sweep(conn)

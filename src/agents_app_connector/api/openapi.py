@@ -38,14 +38,21 @@ ERROR_SCHEMAS: dict[str, Any] = {
 }
 
 ERRORS = {
+    400: "the pairing code is unknown, expired, used, superseded or locked (invalid_code)",
     401: "missing, unknown, revoked or other-plugin bearer token (unauthorized)",
     403: "source address is not allowed (forbidden)",
     404: "no such conversation, attachment or device (not_found, no_spec, unknown_session)",
-    409: "a request with this client_id is in progress (in_progress), or no spec yet (no_spec)",
+    409: (
+        "a request with this client_id is in progress (in_progress), no spec yet (no_spec), "
+        "or the device is already paired (already_paired)"
+    ),
     410: "the attachment was purged (purged)",
     413: "body or part too large, or device quota exceeded (too_large, quota_exceeded)",
     422: "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)",
-    429: "per-device rate limit; see Retry-After (rate_limited)",
+    429: (
+        "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices "
+        "wait for a pairing code (too_many_pending)"
+    ),
     502: "the orchestrator answered an error (orchestrator_error)",
     503: "the orchestrator or the database is unavailable (orchestrator_unavailable, unavailable)",
 }
@@ -91,6 +98,15 @@ def _task_body(description: str) -> dict[str, Any]:
 
 # (status, description, content type, schema) of the success response; None keeps the generated one.
 OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
+    ("post", "/pair"): (
+        "200",
+        "the device token (shown once; Cache-Control: no-store)",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {"device_id": UUID, "name": STR, "plugin": STR, "token": STR},
+        },
+    ),
     ("get", "/config"): (
         "200",
         "limits the device must respect",
@@ -356,6 +372,7 @@ EXTRA_SCHEMAS: dict[str, Any] = {
 }
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
+    ("post", "/pair"): (400, 422, 429),
     ("get", "/config"): (401, 429),
     ("post", "/sketches"): (401, 404, 409, 413, 422, 429),
     ("get", "/conversations"): (401, 429),
@@ -387,13 +404,15 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
         502,
         503,
     ),
-    ("post", "/devices"): (403, 422),
+    ("post", "/devices"): (403, 422, 429),
+    ("post", "/devices/{device_id}/code"): (403, 404, 409, 422, 429),
     ("get", "/devices"): (403,),
     ("delete", "/devices/{device_id}"): (403, 404, 422),
     ("get", "/readyz"): (503,),
 }
 
 SUMMARIES = {
+    "/pair": "Exchange a 6-digit pairing code for the device token (no bearer token)",
     "/config": "Limits and API version",
     "/sketches": "Upload a sketch (multipart: meta, sketch.<i>.png, strokes.<i>.json per page)",
     "/conversations": "List or create conversations",
@@ -414,7 +433,8 @@ SUMMARIES = {
     "/tasks/{key}/todo": "Replace the todo list (relayed)",
     "/tasks/{key}/todo/{item_id}": "Set a todo item status (relayed)",
     "/tasks/{key}/decisions/{decision_id}/answer": "Answer a decision (relayed)",
-    "/devices": "Pair or list devices",
+    "/devices": "Create a device with its first pairing code, or list devices",
+    "/devices/{device_id}/code": "Issue a new pairing code for an unpaired device",
     "/devices/{device_id}": "Revoke a device",
 }
 
@@ -509,6 +529,20 @@ def build_openapi() -> dict[str, Any]:
                         }
                     },
                 }
+            if method == "post" and local == "/pair":
+                operation["requestBody"] = {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["code"],
+                                "additionalProperties": False,
+                                "properties": {"code": {"type": "string", "pattern": "^[0-9]{6}$"}},
+                            }
+                        }
+                    },
+                }
             is_task = path.startswith(DEVICE) and local.startswith("/tasks")
             if is_task:
                 _task_operation(operation, method, local)
@@ -521,7 +555,7 @@ def build_openapi() -> dict[str, Any]:
                     "content": {"application/json": {"schema": shape}},
                 }
             if path.startswith(DEVICE):
-                operation["security"] = [{"deviceToken": []}]
+                operation["security"] = [] if local == "/pair" else [{"deviceToken": []}]
             if local in SUMMARIES:
                 operation["summary"] = SUMMARIES[local]
     for name in ("HTTPValidationError", "ValidationError"):

@@ -37,6 +37,11 @@ taskboard:
 adminAllowedCidrs:
   - 127.0.0.1/32
 
+# Source CIDRs of the ingress controller pods (APPCONN_TRUSTED_PROXY_CIDRS, app pod only): only a
+# peer inside these may name the client IP through X-Real-IP, which keys the per-IP limit of the
+# public pairing exchange. Empty fails safe: every client shares one per-IP bucket.
+trustedProxyCidrs: []
+
 # Extra APPCONN_* settings (limits, retention, handoff presets, ...); keys must start with APPCONN_.
 env: {}
 

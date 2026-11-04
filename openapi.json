@@ -1,8 +1,62 @@
 {
   "components": {
     "schemas": {
+      "CodeResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "expires_at",
+          "expires_in"
+        ],
+        "title": "CodeResponse",
+        "type": "object"
+      },
       "DeviceOut": {
         "properties": {
+          "code_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Expires At"
+          },
+          "code_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "redeemed",
+                  "expired",
+                  "superseded",
+                  "locked"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Status"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -16,6 +70,29 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "paired_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paired At"
+          },
+          "paired_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paired Ip"
           },
           "plugin": {
             "title": "Plugin",
@@ -32,14 +109,28 @@
               }
             ],
             "title": "Revoked At"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "active",
+              "revoked"
+            ],
+            "title": "State",
+            "type": "string"
           }
         },
         "required": [
           "device_id",
           "name",
           "plugin",
+          "state",
           "created_at",
-          "revoked_at"
+          "revoked_at",
+          "paired_at",
+          "paired_ip",
+          "code_status",
+          "code_expires_at"
         ],
         "title": "DeviceOut",
         "type": "object"
@@ -87,6 +178,35 @@
           "created_at"
         ],
         "title": "Event",
+        "type": "object"
+      },
+      "ExchangeResponse": {
+        "properties": {
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "plugin": {
+            "title": "Plugin",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "name",
+          "plugin",
+          "token"
+        ],
+        "title": "ExchangeResponse",
         "type": "object"
       },
       "HandoffIn": {
@@ -159,10 +279,23 @@
       },
       "PairResponse": {
         "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
           "device_id": {
             "format": "uuid",
             "title": "Device Id",
             "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
           },
           "name": {
             "title": "Name",
@@ -171,17 +304,15 @@
           "plugin": {
             "title": "Plugin",
             "type": "string"
-          },
-          "token": {
-            "title": "Token",
-            "type": "string"
           }
         },
         "required": [
+          "code",
+          "expires_at",
+          "expires_in",
           "device_id",
           "name",
-          "plugin",
-          "token"
+          "plugin"
         ],
         "title": "PairResponse",
         "type": "object"
@@ -321,7 +452,7 @@
             "description": "source address is not allowed (forbidden)"
           }
         },
-        "summary": "Pair or list devices"
+        "summary": "Create a device with its first pairing code, or list devices"
       },
       "post": {
         "operationId": "pair_app_admin_v1_devices_post",
@@ -365,9 +496,19 @@
               }
             },
             "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
-        "summary": "Pair or list devices"
+        "summary": "Create a device with its first pairing code, or list devices"
       }
     },
     "/app/admin/v1/devices/{device_id}": {
@@ -421,6 +562,87 @@
           }
         },
         "summary": "Revoke a device"
+      }
+    },
+    "/app/admin/v1/devices/{device_id}/code": {
+      "post": {
+        "description": "A fresh code for a device that has no token yet; it replaces the older code.",
+        "operationId": "new_code_app_admin_v1_devices__device_id__code_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "source address is not allowed (forbidden)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such conversation, attachment or device (not_found, no_spec, unknown_session)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
+          }
+        },
+        "summary": "Issue a new pairing code for an unpaired device"
       }
     },
     "/app/v1/sketch/attachments/{attachment_id}": {
@@ -488,7 +710,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -554,7 +776,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -622,7 +844,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -669,7 +891,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -727,7 +949,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -836,7 +1058,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -920,7 +1142,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), or no spec yet (no_spec)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
           },
           "422": {
             "content": {
@@ -940,7 +1162,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "502": {
             "content": {
@@ -1041,7 +1263,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), or no spec yet (no_spec)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
           },
           "422": {
             "content": {
@@ -1061,7 +1283,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -1126,7 +1348,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -1191,7 +1413,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -1275,7 +1497,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -1361,7 +1583,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -1432,7 +1654,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "502": {
             "content": {
@@ -1461,6 +1683,90 @@
           }
         ],
         "summary": "Sessions and presets a spec can be handed to"
+      }
+    },
+    "/app/v1/sketch/pair": {
+      "post": {
+        "operationId": "exchange_app_v1_sketch_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "pattern": "^[0-9]{6}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "device_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "plugin": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "the device token (shown once; Cache-Control: no-store)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the pairing code is unknown, expired, used, superseded or locked (invalid_code)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
+          }
+        },
+        "security": [],
+        "summary": "Exchange a 6-digit pairing code for the device token (no bearer token)"
       }
     },
     "/app/v1/sketch/sketches": {
@@ -1531,7 +1837,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), or no spec yet (no_spec)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
           },
           "413": {
             "content": {
@@ -1561,7 +1867,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           }
         },
         "security": [
@@ -1668,7 +1974,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -1760,7 +2066,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -1813,7 +2119,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -1896,7 +2202,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -2033,7 +2339,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -2155,7 +2461,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -2302,7 +2608,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -2424,7 +2730,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {
@@ -2554,7 +2860,7 @@
                 }
               }
             },
-            "description": "per-device rate limit; see Retry-After (rate_limited)"
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
           },
           "503": {
             "content": {

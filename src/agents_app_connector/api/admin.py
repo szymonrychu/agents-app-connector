@@ -11,8 +11,8 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agents_app_connector.api.errors import ApiError, add_error_handlers, error_response
-from agents_app_connector.api.schemas import DeviceOut, PairRequest, PairResponse
-from agents_app_connector.db import devices
+from agents_app_connector.api.schemas import CodeResponse, DeviceOut, PairRequest, PairResponse
+from agents_app_connector.db import devices, pairing
 from agents_app_connector.plugins import PLUGIN_IDS
 from agents_app_connector.settings import Settings
 
@@ -70,16 +70,47 @@ def add_probes(app: FastAPI, pool: AsyncConnectionPool) -> None:
         return JSONResponse({"status": "ok"})
 
 
-def build_router(pool: AsyncConnectionPool) -> APIRouter:
+def build_router(pool: AsyncConnectionPool, settings: Settings) -> APIRouter:
     router = APIRouter()
+    ttl = settings.pairing_code_ttl_seconds
+
+    async def issue(conn: psycopg.AsyncConnection, device_id: uuid.UUID) -> pairing.IssuedCode:
+        try:
+            return await pairing.issue(conn, device_id, ttl, settings.pairing_max_pending)
+        except pairing.TooManyPending:
+            raise ApiError(
+                429, "too_many_pending", "too many devices are waiting for a pairing code"
+            ) from None
 
     @router.post("/devices", status_code=201, response_model=PairResponse)
     async def pair(body: PairRequest) -> PairResponse:
         if body.plugin not in PLUGIN_IDS:
             raise ApiError(422, "invalid_request", f"unknown plugin: {body.plugin!r}")
-        async with pool.connection() as conn:
-            row, token = await devices.create(conn, body.plugin, body.name)
-        return PairResponse(device_id=row.id, name=row.name, plugin=row.plugin, token=token)
+        async with pool.connection() as conn, conn.transaction():
+            row = await devices.create(conn, body.plugin, body.name)
+            issued = await issue(conn, row.id)
+        log.info("device %s created, pairing code issued", row.id)
+        return PairResponse(
+            device_id=row.id,
+            name=row.name,
+            plugin=row.plugin,
+            code=issued.code,
+            expires_at=issued.expires_at,
+            expires_in=ttl,
+        )
+
+    @router.post("/devices/{device_id}/code", status_code=201, response_model=CodeResponse)
+    async def new_code(device_id: uuid.UUID) -> CodeResponse:
+        """A fresh code for a device that has no token yet; it replaces the older code."""
+        async with pool.connection() as conn, conn.transaction():
+            info = await devices.get_info(conn, device_id)
+            if info is None or info.state == "revoked":
+                raise ApiError(404, "not_found", "no active device with this id")
+            if info.state == "active":
+                raise ApiError(409, "already_paired", "the device is already paired")
+            issued = await issue(conn, device_id)
+        log.info("device %s: new pairing code issued", device_id)
+        return CodeResponse(code=issued.code, expires_at=issued.expires_at, expires_in=ttl)
 
     @router.get("/devices", response_model=list[DeviceOut])
     async def list_devices() -> list[DeviceOut]:
@@ -90,8 +121,13 @@ def build_router(pool: AsyncConnectionPool) -> APIRouter:
                 device_id=r.id,
                 name=r.name,
                 plugin=r.plugin,
+                state=r.state,
                 created_at=r.created_at,
                 revoked_at=r.revoked_at,
+                paired_at=r.paired_at,
+                paired_ip=r.paired_ip,
+                code_status=r.code_status,
+                code_expires_at=r.code_expires_at,
             )
             for r in rows
         ]
@@ -113,7 +149,7 @@ def create_admin_app(pool: AsyncConnectionPool, settings: Settings) -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
-    app.include_router(build_router(pool), prefix=PREFIX)
+    app.include_router(build_router(pool, settings), prefix=PREFIX)
     app.add_middleware(SourceAllowlist, networks=settings.admin_networks())
     add_error_handlers(app)
     add_probes(app, pool)

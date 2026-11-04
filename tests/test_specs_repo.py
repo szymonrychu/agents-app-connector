@@ -2,12 +2,13 @@ import uuid
 
 import psycopg
 import pytest
+from helpers import paired
 
-from agents_app_connector.db import conversations, devices, specs
+from agents_app_connector.db import conversations, specs
 
 
 async def conv(conn):
-    dev, _ = await devices.create(conn, "sketch", "boox")
+    dev, _ = await paired(conn, "sketch", "boox")
     return await conversations.create(conn, dev.id, "sketch")
 
 

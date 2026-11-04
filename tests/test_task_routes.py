@@ -7,11 +7,11 @@ import logging
 
 import httpx
 import pytest
-from helpers import PREFIX, FakeSse, Sketch, bearer, event
+from helpers import PREFIX, FakeSse, Sketch, bearer, event, paired
 from pydantic import SecretStr
 
 from agents_app_connector.api.device import create_device_app
-from agents_app_connector.db import devices
+from agents_app_connector.db import device_tokens, devices
 from agents_app_connector.plugins.sketch import task_routes
 
 DELEGATE = "delegate-test-token"
@@ -214,8 +214,8 @@ async def test_non_json_upstream_is_503_taskboard_unavailable(api, token, board,
 
 
 async def test_missing_revoked_and_other_plugin_token_are_401(api, token, board, conn):
-    _, other = await devices.create(conn, "other", "x")
-    row = await devices.by_token(conn, token)
+    _, other = await paired(conn, "other", "x")
+    row = await device_tokens.by_token(conn, token)
     for headers in ({}, bearer("unknown"), bearer(other)):
         for method, path in (("GET", "/tasks"), ("GET", "/tasks/T-1"), ("DELETE", "/tasks/x")):
             r = await api.request(method, path, headers=headers)
@@ -342,7 +342,7 @@ async def test_stream_keepalive_comment(make_stream_app, conn, token):
 
 
 async def test_stream_requires_device_token_401(make_stream_app, conn):
-    _, other = await devices.create(conn, "other", "x")
+    _, other = await paired(conn, "other", "x")
     async with serving(make_stream_app()) as c:
         for headers in ({}, bearer("unknown"), bearer(other)):
             r = await c.get("/tasks/stream", headers=headers)
@@ -377,7 +377,7 @@ async def test_stream_not_matched_by_task_key_route(make_stream_app, sse, conn, 
 
 
 async def test_two_devices_share_one_upstream_subscription(make_stream_app, sse, conn, token):
-    _, second = await devices.create(conn, "sketch", "second")
+    _, second = await paired(conn, "sketch", "second")
     async with serving(make_stream_app()) as c:
 
         async def feed():

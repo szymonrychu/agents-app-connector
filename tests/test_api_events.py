@@ -6,7 +6,7 @@ import pytest
 from helpers import PREFIX, bearer
 from pydantic import SecretStr
 
-from agents_app_connector.db import conversations, devices, events
+from agents_app_connector.db import conversations, device_tokens, events
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ async def live(make_app, url):
 
 @pytest.fixture
 async def cid(conn, token):
-    device = await devices.by_token(conn, token)
+    device = await device_tokens.by_token(conn, token)
     return await conversations.create(conn, device.id, "sketch")
 
 

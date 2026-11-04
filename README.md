@@ -21,15 +21,20 @@ as `openapi.json` (regenerate with `uv run python -m agents_app_connector.api.op
 
 ## Pairing
 
-A device is paired through the admin API and then uses its bearer token on the device API.
+A device is paired with a short-lived 6-digit code that the operator reads on the web page and
+types on the device.
 
 1. An operator calls `POST /app/admin/v1/devices` with `{"name": "...", "plugin": "sketch"}`
-   behind SSO. The response carries the device token once; only its sha256 is stored.
-2. The device sends `Authorization: Bearer <token>` on every device request.
+   behind SSO. The response carries a 6-digit `code` once, valid for 10 minutes
+   (`APPCONN_PAIRING_CODE_TTL_SECONDS`). Only its sha256 is stored. `POST
+   /app/admin/v1/devices/{device_id}/code` issues a fresh code (the older one stops working)
+   for a device that is not paired yet; a paired device never gets a code (no re-pairing).
+2. The device sends `Authorization: Bearer <token>` on every other device request. Only the
+   sha256 of the token is stored.
 3. `DELETE /app/admin/v1/devices/{device_id}` revokes the device; its token then answers 401,
    and open event streams end.
 
-A device token never authorises an admin route.
+A device token never authorises an admin route. The code and the token are never logged.
 
 ## API
 
@@ -37,6 +42,19 @@ Device API v1 (prefix `/app/v1/sketch`, bearer device token). Errors are JSON
 `{"error": <code>, "detail": <text>}`. Every state-changing request carries a `client_id`
 (uuid); repeating it with the same payload replays the stored answer (200), with another
 payload it answers 422 `idempotency_mismatch`.
+
+### `POST /app/v1/sketch/pair`
+
+Public, no bearer token: exchange the 6-digit code from the Devices page for the device
+token. Body `{"code": "123456"}` (exactly six digits, nothing else). 200
+`{device_id, name, plugin, token}` with `Cache-Control: no-store`; the code works once and only
+while it is the newest code of its device. 400 `invalid_code` for every other cause (unknown,
+expired, used, superseded, revoked device, locked): one body, no oracle. 422 `invalid_request`
+for a malformed body. Every failed exchange (also a 422) counts against all pending codes;
+at `APPCONN_PAIRING_MAX_FAILURES` failures a code is locked for good. 429 `rate_limited` with
+`Retry-After` when a client IP (`APPCONN_PAIRING_IP_PER_MINUTE`) or all clients together
+(`APPCONN_PAIRING_GLOBAL_PER_MINUTE`) exceed their budget. The client IP is the socket peer, or
+`X-Real-IP` when the peer is inside `APPCONN_TRUSTED_PROXY_CIDRS`.
 
 ### `GET /app/v1/sketch/config`
 
@@ -177,11 +195,23 @@ allowlist are `{"error": "forbidden"}`).
 
 ### `POST /app/admin/v1/devices`
 
-Pair a device: `{name, plugin}`. 201 `{device_id, name, plugin, token}`.
+Create a device and its first pairing code: `{name, plugin}`. 201
+`{device_id, name, plugin, code, expires_at, expires_in}` (`code` is 6 digits, shown once,
+`expires_in` in seconds). 429 `too_many_pending` when `APPCONN_PAIRING_MAX_PENDING` other
+devices already wait for a code (nothing is created).
+
+### `POST /app/admin/v1/devices/{device_id}/code`
+
+A new code for a device that has no token yet; the older code stops working. 201
+`{code, expires_at, expires_in}`; 404 `not_found` for an unknown or revoked device; 409
+`already_paired` when the device already has a token; 429 `too_many_pending`.
 
 ### `GET /app/admin/v1/devices`
 
-List devices: `[{device_id, name, plugin, created_at, revoked_at}]`.
+List devices: `[{device_id, name, plugin, state, created_at, revoked_at, paired_at, paired_ip,
+code_status, code_expires_at}]`. `state` is `pending` (no token yet), `active` or `revoked`;
+`code_status` is the newest code's status (`pending`, `redeemed`, `expired`, `superseded`,
+`locked`) or null. The code itself is never listed.
 
 ### `DELETE /app/admin/v1/devices/{device_id}`
 
@@ -223,6 +253,12 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_ADMIN_ALLOWED_CIDRS` | `127.0.0.1/32` | comma-separated source CIDRs of the admin API |
 | `APPCONN_HANDOFF_PRESETS` | empty | comma-separated presets a spec may be handed to |
 | `APPCONN_MAX_TEXT_CHARS` | 8000 | follow-up message length cap |
+| `APPCONN_PAIRING_CODE_TTL_SECONDS` | 600 | life of a pairing code (60 to 1800) |
+| `APPCONN_PAIRING_MAX_FAILURES` | 5 | failed exchanges that lock a pending code (1 to 10) |
+| `APPCONN_PAIRING_MAX_PENDING` | 3 | devices that may wait for a code at once (1 to 20) |
+| `APPCONN_PAIRING_IP_PER_MINUTE` | 5 | pairing exchanges per client IP per minute |
+| `APPCONN_PAIRING_GLOBAL_PER_MINUTE` | 30 | pairing exchanges per minute for all clients |
+| `APPCONN_TRUSTED_PROXY_CIDRS` | empty | source CIDRs of the ingress whose `X-Real-IP` names the client IP |
 | `APPCONN_TASKBOARD_URL` | unset | base URL of the taskboard delegate listener; set together with the token or not at all |
 | `APPCONN_TASKBOARD_TOKEN` | unset | delegate bearer for the task relay (not the orchestrator relay token) |
 

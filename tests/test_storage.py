@@ -3,8 +3,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from helpers import paired
 
-from agents_app_connector.db import attachments, devices
+from agents_app_connector.db import attachments
 from agents_app_connector.storage import AttachmentStore
 
 
@@ -34,7 +35,7 @@ def test_path_escape_refused(tmp_path):
 
 
 async def _inbound(conn):
-    dev, _ = await devices.create(conn, "sketch", "d")
+    dev, _ = await paired(conn, "sketch", "d")
     cid, iid = uuid.uuid4(), uuid.uuid4()
     await conn.execute(
         "INSERT INTO conversations (id, device_id, plugin) VALUES (%s, %s, 'sketch')",

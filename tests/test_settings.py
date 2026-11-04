@@ -124,3 +124,27 @@ def test_taskboard_token_not_in_repr(monkeypatch):
     monkeypatch.setenv("APPCONN_TASKBOARD_TOKEN", "secret-value-xyz")
     s = load_settings(Settings)
     assert "secret-value-xyz" not in repr(s) and "secret-value-xyz" not in str(s)
+
+
+def test_pairing_defaults(monkeypatch):
+    s = load_settings(Settings)
+    assert s.pairing_code_ttl_seconds == 600 and s.pairing_max_failures == 5
+    assert s.pairing_max_pending == 3 and s.trusted_proxy_networks() == []
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("PAIRING_CODE_TTL_SECONDS", "59"),
+        ("PAIRING_CODE_TTL_SECONDS", "1801"),
+        ("PAIRING_MAX_FAILURES", "0"),
+        ("PAIRING_MAX_FAILURES", "11"),
+        ("PAIRING_MAX_PENDING", "0"),
+        ("PAIRING_IP_PER_MINUTE", "0"),
+        ("PAIRING_GLOBAL_PER_MINUTE", "0"),
+        ("TRUSTED_PROXY_CIDRS", "not-a-cidr"),
+    ],
+)
+def test_pairing_settings_are_bounded(monkeypatch, name, value):
+    monkeypatch.setenv(f"APPCONN_{name}", value)
+    assert f"APPCONN_{name}" in problems()

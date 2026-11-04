@@ -1,16 +1,19 @@
 """Upload to spec to feedback to hand-off, end to end: real Postgres, FakeOrchestrator, the
 admin and device apps over httpx, and the worker and tracker ticked by hand."""
 
+import asyncio
+import json
 import uuid
 
 import httpx
 import pytest
-from helpers import PREFIX, bearer, files, meta, only, post, rows
+from helpers import PREFIX, FakeSse, bearer, event, files, meta, only, post, rows
+from pydantic import SecretStr
 
 from agents_app_connector.api.admin import PREFIX as ADMIN_PREFIX
 from agents_app_connector.api.admin import create_admin_app
 from agents_app_connector.api.device import create_device_app
-from agents_app_connector.plugins.sketch import PLUGIN
+from agents_app_connector.plugins.sketch import PLUGIN, task_routes
 from agents_app_connector.tracker import Tracker
 from agents_app_connector.worker import Worker
 
@@ -144,3 +147,94 @@ async def test_dispatch_marker_survives_restart(
         await Worker(orchestrator, pool, settings, store).tick()
         assert list(fake.messages) == [mid]
         assert await rows(conn, "SELECT message_id FROM runs") == [(str(mid),)]
+
+
+DELEGATE = "delegate-test-token"
+UP = "/taskboard/api/v1"
+
+
+class FakeTaskboard(FakeSse):
+    """The delegate listener: a task list, one open decision and the SSE stream."""
+
+    def __init__(self):
+        super().__init__()
+        self.answered: dict | None = None
+        self.seen_auth: set[str] = set()
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.seen_auth.add(request.headers.get("authorization", ""))
+        if request.url.path == f"{UP}/stream":
+            return super().handler(request)
+        if request.method == "GET" and request.url.path == f"{UP}/tasks":
+            items = [{"key": "T-1", "title": "first", "status": "open", "labels": ["a"]}]
+            return httpx.Response(200, json={"items": items, "next_cursor": None})
+        if request.method == "POST" and request.url.path == f"{UP}/tasks/T-1/decisions/4/answer":
+            if self.answered is not None:
+                err = {"code": "already_answered", "message": "decision already answered"}
+                return httpx.Response(409, json={"error": err})
+            self.answered = json.loads(request.content)
+            return httpx.Response(200, json={"key": "T-1", "decisions": [{"id": 4}]})
+        return httpx.Response(404, json={"error": {"code": "not_found", "message": "no"}})
+
+
+async def test_e2e_task_relay(pool, settings, store, orchestrator, monkeypatch):
+    monkeypatch.setattr(task_routes, "KEEPALIVE_SECONDS", 0.2)
+    board = FakeTaskboard()
+    taskboard = httpx.AsyncClient(
+        base_url="http://taskboard", transport=httpx.MockTransport(board.handler)
+    )
+    s = settings.model_copy(
+        update={
+            "taskboard_url": "http://taskboard",
+            "taskboard_token": SecretStr(DELEGATE),
+            "poll_seconds": 0.2,
+        }
+    )
+    admin_app = create_admin_app(pool, s)
+    device_app = create_device_app(
+        pool, s, [PLUGIN], store, orchestrator=orchestrator, taskboard=taskboard
+    )
+    async with (
+        device_app.router.lifespan_context(device_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=admin_app, client=("127.0.0.1", 1)),
+            base_url="http://admin" + ADMIN_PREFIX,
+        ) as admin,
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=device_app),
+            base_url="http://dev" + PREFIX,
+            timeout=20,
+        ) as api,
+    ):
+        paired = await admin.post("/devices", json={"name": "boox"})
+        token, device_id = paired.json()["token"], paired.json()["device_id"]
+
+        listed = await api.get("/tasks?status=active&label=a", headers=bearer(token))
+        assert listed.status_code == 200 and listed.json()["items"][0]["key"] == "T-1"
+
+        first = await api.post(
+            "/tasks/T-1/decisions/4/answer", json={"choice": 1}, headers=bearer(token)
+        )
+        assert first.status_code == 200 and board.answered == {"choice": 1}
+        second = await api.post(
+            "/tasks/T-1/decisions/4/answer", json={"choice": 1}, headers=bearer(token)
+        )
+        assert second.status_code == 409
+        assert second.json()["error"]["code"] == "already_answered"
+
+        async def feed_then_revoke():
+            await asyncio.wait_for(board.connected.wait(), 5)
+            board.send(event("T-1"))
+            await asyncio.sleep(0.4)
+            assert (await admin.delete(f"/devices/{device_id}")).status_code == 204
+
+        feeder = asyncio.create_task(feed_then_revoke())
+        stream = await asyncio.wait_for(api.get("/tasks/stream", headers=bearer(token)), 40)
+        await feeder
+        assert stream.status_code == 200
+        assert '"key":"T-1"' in stream.text.replace(" ", "")
+        gone = await api.get("/tasks", headers=bearer(token))
+        assert gone.status_code == 401
+
+    assert board.seen_auth == {f"Bearer {DELEGATE}"}
+    await taskboard.aclose()

@@ -61,3 +61,13 @@ def test_readme_documents_task_relay_errors_and_rules():
     assert "APPCONN_TASKBOARD_URL" in section("Configuration")
     assert "APPCONN_TASKBOARD_TOKEN" in section("Configuration")
     assert "stores nothing" in api.lower()
+
+
+def test_readme_documents_annotates():
+    upload = re.search(
+        r"^### `POST /app/v1/sketch/sketches`\s*$(.*?)^### ", section("API"), re.M | re.S
+    )
+    assert upload, "README has no upload section"
+    body = upload.group(1)
+    for word in ("annotates", "spec_version", "doc_page", "lines", "`no_spec`"):
+        assert word in body, word

@@ -342,7 +342,10 @@ EXTRA_SCHEMAS: dict[str, Any] = {
                 "description": (
                     'JSON: {"client_id": uuid, "conversation": "current"|"new", '
                     '"conversation_id"?: uuid, "caption"?: string, "pages": [{"page": int, '
-                    '"canvas": {"w", "h", "dpi"}}]}. Part i (sketch.<i>.png, strokes.<i>.json) '
+                    '"canvas": {"w", "h", "dpi"}}], "annotates"?: {"spec_version": int >= 1, '
+                    '"pages": [{"page": int, "doc_page": int, "lines": [int, int]}]}}. '
+                    "annotates needs conversation_id and answers 404 no_spec when that spec "
+                    "version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) "
                     "belongs to pages[i]; every page needs its png."
                 ),
             },
@@ -354,7 +357,7 @@ EXTRA_SCHEMAS: dict[str, Any] = {
 
 ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/config"): (401, 429),
-    ("post", "/sketches"): (401, 409, 413, 422, 429),
+    ("post", "/sketches"): (401, 404, 409, 413, 422, 429),
     ("get", "/conversations"): (401, 429),
     ("post", "/conversations"): (401, 429),
     ("delete", "/conversations/{conversation_id}"): (401, 404, 429),

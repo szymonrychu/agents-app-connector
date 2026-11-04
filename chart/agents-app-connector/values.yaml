@@ -16,9 +16,12 @@ postgres:
   existingSecret: ""
   existingSecretKey: uri
 
-# The orchestrator API is required: url, and exactly one of token and existingSecret.
+# The orchestrator API is required: url, and exactly one of token and existingSecret. agentUrl is
+# the orchestrator agent port (no /agent/v1 suffix): the translator tools resolve the bearer of
+# each call to its session with GET /agent/v1/me there.
 orchestrator:
   url: ""
+  agentUrl: ""
   token: ""
   existingSecret: ""
   existingSecretKey: token
@@ -66,6 +69,9 @@ components:
       limits: {memory: 384Mi}
   app:
     port: 8001
+    # Translator tools (MCP, streamable HTTP at /mcp) for the sketch-translator sessions. Served
+    # by the <fullname>-mcp Service, always ClusterIP and never routed by an Ingress.
+    mcpPort: 8002
     podAnnotations: {}
     resources:
       requests: {cpu: 50m, memory: 192Mi}

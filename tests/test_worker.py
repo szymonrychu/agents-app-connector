@@ -147,7 +147,7 @@ async def test_gone_session_restarts_with_previous_spec(worker, fake, upload, sa
     new = [s for s in fake.sessions.values() if s["id"] != first_session][0]
     msg = [m for m in fake.messages.values() if m["session_id"] == new["id"]][0]
     assert "Previous spec version 1" in msg["text"] and "# Login spec" in msg["text"]
-    assert "User feedback: also add a logo" in msg["text"]
+    assert "User notes: also add a logo" in msg["text"]
     atts = fake.attachments[msg["id"]]
     assert atts[0].data == PNG and atts[0].name.startswith("sketch-")
     (b,) = await rows(conn, "SELECT session_id FROM bindings WHERE released_at IS NULL")

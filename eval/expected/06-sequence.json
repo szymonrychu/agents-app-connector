@@ -7,5 +7,6 @@
     "fetch"
   ],
   "diagram": "sequenceDiagram",
-  "min_word_recall": 0.8
+  "min_word_recall": 0.8,
+  "min_precision": 0.9
 }

@@ -22,6 +22,8 @@ def app_settings(settings, url):
         update={
             "database_url": SecretStr(url),
             "device_port": free_port(),
+            "mcp_port": free_port(),
+            "orchestrator_agent_url": "http://orch-agent.invalid",
             "poll_seconds": 0.1,
             "http_host": "127.0.0.1",
         }
@@ -123,3 +125,20 @@ async def test_second_instance_waits_for_singleton(app_settings, orchestrator):
     await wait_ready(second_settings.device_port)
     second_stop.set()
     await asyncio.wait_for(second, 10)
+
+
+async def test_serves_translator_tools_on_the_mcp_port(app_settings, orchestrator):
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_app(app_settings, orchestrator=orchestrator, stop=stop))
+    await wait_ready(app_settings.device_port)
+    async with httpx.AsyncClient() as c:
+        r = await c.post(f"http://127.0.0.1:{app_settings.mcp_port}/mcp", json={})
+    stop.set()
+    await asyncio.wait_for(task, 10)
+    assert r.status_code == 401 and r.json()["error"] == "unauthorized"
+
+
+async def test_app_without_orchestrator_agent_url_refuses_to_start(app_settings, orchestrator):
+    settings = app_settings.model_copy(update={"orchestrator_agent_url": None})
+    with pytest.raises(ValueError, match="APPCONN_ORCHESTRATOR_AGENT_URL"):
+        await run_app(settings, orchestrator=orchestrator, stop=asyncio.Event())

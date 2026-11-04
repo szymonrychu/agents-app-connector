@@ -15,6 +15,7 @@ hands specs off to other sessions.
 |---------|--------------|---------|----------|
 | `agents-app-connector admin` | `APPCONN_HTTP_PORT` | 8000 | admin API under `/app/admin`, behind SSO and a source CIDR allowlist |
 | `agents-app-connector app` | `APPCONN_DEVICE_PORT` | 8001 | device API under `/app/v1/sketch`, the only public path |
+| `agents-app-connector app` | `APPCONN_MCP_PORT` | 8002 | translator tools (MCP) at `/mcp`, cluster-internal, never on an ingress |
 
 Both serve `/healthz` and `/readyz` for probes. The OpenAPI document of both APIs is committed
 as `openapi.json` (regenerate with `uv run python -m agents_app_connector.api.openapi > openapi.json`).
@@ -82,7 +83,8 @@ follow runs alike, and returns the next version; any existing version may be ann
 
 ### `GET /app/v1/sketch/conversations`
 
-The device's conversations: `[{id, title, created_at, latest_spec_version}]`.
+The device's conversations: `[{id, title, created_at, latest_spec_version,
+latest_feedback_id}]`; `latest_feedback_id` is null until the translator sent feedback.
 
 ### `POST /app/v1/sketch/conversations`
 
@@ -90,7 +92,7 @@ Create an empty conversation. 201 `{id}`.
 
 ### `DELETE /app/v1/sketch/conversations/{conversation_id}`
 
-Delete a conversation with its specs and files. 204; 404 `not_found`.
+Delete a conversation with its specs, feedback and files. 204; 404 `not_found`.
 
 ### `POST /app/v1/sketch/conversations/{conversation_id}/messages`
 
@@ -99,7 +101,8 @@ Follow-up text `{client_id, text}` that refines the spec. 202 `{message_id}`.
 ### `GET /app/v1/sketch/conversations/{conversation_id}/events`
 
 Long poll: `?after=<cursor>&wait=<seconds>`. Returns `{events: [{cursor, type, created_at,
-...}], cursor}`. Event types: `sketch_status`, `spec`, `message`, `handoff`.
+...}], cursor}`. Event types: `sketch_status`, `spec`, `message`, `handoff`, `feedback`
+(`{feedback_id, kind}`, one per item).
 
 ### `GET /app/v1/sketch/conversations/{conversation_id}/stream`
 
@@ -116,6 +119,14 @@ Latest spec as `text/markdown`.
 ### `GET /app/v1/sketch/conversations/{conversation_id}/spec/{version}`
 
 One spec version, same shape as the latest spec.
+
+### `GET /app/v1/sketch/conversations/{conversation_id}/feedback`
+
+Translator feedback, kept apart from the document: `?after=<id>` returns `{items: [{id, kind,
+text, where, spec_version, created_at}], cursor}`, oldest first, at most 100 per call. `kind` is
+`question`, `uncertain`, `illegible` or `note`; `where` is optional free text (for example
+"page 2, box Login"); `spec_version` is the version the same turn wrote, null when it wrote none.
+404 `not_found`.
 
 ### `GET /app/v1/sketch/attachments/{attachment_id}`
 
@@ -217,11 +228,33 @@ code_status, code_expires_at}]`. `state` is `pending` (no token yet), `active` o
 
 Revoke a device. 204; 404 `not_found` for an unknown or already revoked device.
 
+## Translator tools
+
+The app process also serves an MCP server (streamable HTTP, stateless, `POST /mcp` on
+`APPCONN_MCP_PORT`) for the sketch-translator sessions. The preset points the translator at it
+through `wrapper.mcp_servers` with the session's own orchestrator agent token as bearer
+(`Authorization: Bearer ${ORCH_AGENT_TOKEN}`). The connector resolves the bearer with `GET
+/agent/v1/me` on `APPCONN_ORCHESTRATOR_AGENT_URL` (cached 60 s by the token's sha256; the token
+is never logged or stored), then to the in-progress turn of the conversation bound to that
+session. A missing or refused bearer answers 401, an unreachable orchestrator 503.
+
+- `document_write(markdown)` stores the next spec version of the conversation: the document is a
+  faithful transcription of the page and nothing else. Each call is a new version. Errors:
+  `no_active_turn`, `empty_document`, `document_too_large` (`APPCONN_MAX_DOCUMENT_BYTES`).
+- `feedback_add(kind, text, where?)` stores one feedback item (`question`, `uncertain`,
+  `illegible` or `note`; text up to 2000 characters, where up to 200) and appends a `feedback`
+  event. Errors: `no_active_turn`, `empty_text`, `text_too_long`, `where_too_long`,
+  `feedback_limit` (`APPCONN_MAX_FEEDBACK_PER_RUN` per turn).
+
+The server checks structure only (sizes, kinds, caps, own conversation); it cannot tell
+transcription from invention, so the prompt and the eval hold the content contract.
+
 ## Configuration
 
 Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL`,
 `APPCONN_ORCHESTRATOR_URL` and an orchestrator token (`APPCONN_ORCHESTRATOR_TOKEN` or
-`APPCONN_ORCHESTRATOR_TOKEN_FILE`). A bad configuration exits with code 78.
+`APPCONN_ORCHESTRATOR_TOKEN_FILE`); the `app` command also needs
+`APPCONN_ORCHESTRATOR_AGENT_URL`. A bad configuration exits with code 78.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -261,12 +294,17 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_TRUSTED_PROXY_CIDRS` | empty | source CIDRs of the ingress whose `X-Real-IP` names the client IP |
 | `APPCONN_TASKBOARD_URL` | unset | base URL of the taskboard delegate listener; set together with the token or not at all |
 | `APPCONN_TASKBOARD_TOKEN` | unset | delegate bearer for the task relay (not the orchestrator relay token) |
+| `APPCONN_ORCHESTRATOR_AGENT_URL` | unset, required by `app` | orchestrator agent port base URL; the translator tools resolve callers with `GET /agent/v1/me` there |
+| `APPCONN_MCP_PORT` | 8002 | translator tools port, must differ from the admin and device ports |
+| `APPCONN_MAX_DOCUMENT_BYTES` | 262144 | `document_write` size cap (1024 to 1048576) |
+| `APPCONN_MAX_FEEDBACK_PER_RUN` | 30 | `feedback_add` items per turn (1 to 200) |
 
 ## Subcommands
 
 - `agents-app-connector migrate` applies database migrations.
 - `agents-app-connector admin` runs the admin API.
-- `agents-app-connector app` runs the device API, dispatch worker, reply tracker and retention.
+- `agents-app-connector app` runs the device API, translator tools, dispatch worker, reply
+  tracker and retention.
 - `agents-app-connector purge` deletes expired data once and exits.
 
 ## Development

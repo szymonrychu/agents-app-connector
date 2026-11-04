@@ -28,7 +28,7 @@ EXIT_BAD_SETTINGS = 78
 SUBCOMMANDS = {
     "migrate": "apply database migrations",
     "admin": "run the admin API (device pairing, behind SSO and a CIDR allowlist)",
-    "app": "run the device API, dispatch worker, reply tracker and retention",
+    "app": "run the device API, translator tools, dispatch worker, reply tracker and retention",
     "purge": "delete expired data once and exit",
 }
 
@@ -49,6 +49,13 @@ def _load_migrate() -> MigrateSettings:
         return MigrateSettings()
     except ValidationError:
         raise SettingsError({"APPCONN_DATABASE_URL": "required"}) from None
+
+
+def _load_app() -> Settings:
+    settings = load_settings(Settings)
+    if not settings.orchestrator_agent_url:
+        raise SettingsError({"APPCONN_ORCHESTRATOR_AGENT_URL": "required by the app process"})
+    return settings
 
 
 def _cmd_migrate(settings: MigrateSettings) -> int:
@@ -99,7 +106,7 @@ def _cmd_purge(settings: Settings) -> int:
 COMMANDS: dict[str, tuple[Callable, Callable]] = {
     "migrate": (_load_migrate, _cmd_migrate),
     "admin": (lambda: load_settings(Settings), _cmd_admin),
-    "app": (lambda: load_settings(Settings), _cmd_app),
+    "app": (_load_app, _cmd_app),
     "purge": (lambda: load_settings(Settings), _cmd_purge),
 }
 

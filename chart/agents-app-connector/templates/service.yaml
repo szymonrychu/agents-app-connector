@@ -18,3 +18,21 @@ spec:
   selector:
     {{- include "agents-app-connector.componentLabels" (dict "context" $ "component" $component) | nindent 4 }}
 {{- end }}
+---
+# Translator tools for the sketch-translator agent pods: cluster-internal only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agents-app-connector.fullname" . }}-mcp
+  labels:
+    {{- include "agents-app-connector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  ports:
+    - name: mcp
+      port: {{ .Values.components.app.mcpPort }}
+      targetPort: mcp
+      protocol: TCP
+  selector:
+    {{- include "agents-app-connector.componentLabels" (dict "context" . "component" "app") | nindent 4 }}

@@ -88,3 +88,20 @@ def test_upload_documents_annotates_and_no_spec():
     assert "no_spec" in post["responses"]["404"]["description"]
     meta = doc["components"]["schemas"]["SketchUpload"]["properties"]["meta"]["description"]
     assert "annotates" in meta and "spec_version" in meta
+
+
+def test_feedback_route_and_schema_documented():
+    doc = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    op = doc["paths"]["/app/v1/sketch/conversations/{conversation_id}/feedback"]["get"]
+    assert {"200", "401", "404"} <= set(op["responses"])
+    schemas = doc["components"]["schemas"]
+    assert schemas["Feedback"]["properties"]["kind"]["enum"] == [
+        "question",
+        "uncertain",
+        "illegible",
+        "note",
+    ]
+    assert "feedback" in schemas["Event"]["properties"]["type"]["enum"]
+    listing = doc["paths"]["/app/v1/sketch/conversations"]["get"]["responses"]["200"]
+    item = listing["content"]["application/json"]["schema"]["items"]["properties"]
+    assert "latest_feedback_id" in item

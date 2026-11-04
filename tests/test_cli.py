@@ -67,3 +67,16 @@ def test_httpx_request_lines_are_silenced(monkeypatch):
     monkeypatch.setattr(logging.getLogger("httpx"), "level", logging.NOTSET)
     assert main(["purge"]) == 0
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+
+
+def test_app_needs_orchestrator_agent_url(monkeypatch, capsys):
+    import os
+
+    for key in list(os.environ):
+        if key.startswith("APPCONN_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("APPCONN_DATABASE_URL", "postgresql://u:p@db/x")
+    monkeypatch.setenv("APPCONN_ORCHESTRATOR_URL", "http://orch")
+    monkeypatch.setenv("APPCONN_ORCHESTRATOR_TOKEN", "tok")
+    assert main(["app"]) == EXIT_BAD_SETTINGS
+    assert "APPCONN_ORCHESTRATOR_AGENT_URL" in capsys.readouterr().err

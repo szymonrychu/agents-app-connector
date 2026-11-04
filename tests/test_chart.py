@@ -17,7 +17,11 @@ ORCH_TOKEN = "".join(["orch", "-", "fixture", "-", "value"])
 BASE = {
     "image": {"tag": "1.2.3"},
     "postgres": {"url": "postgresql://" + "u:" + DB_PASS + "@db.example.com:5432/a"},
-    "orchestrator": {"url": "http://orchestrator.example.com", "token": ORCH_TOKEN},
+    "orchestrator": {
+        "url": "http://orchestrator.example.com",
+        "agentUrl": "http://orchestrator-agent.example.com",
+        "token": ORCH_TOKEN,
+    },
 }
 INGRESSES = {"ingress": {"device": {"enabled": True}, "admin": {"enabled": True}}}
 
@@ -109,7 +113,7 @@ def test_commands_ports_and_migrate_init():
         assert container["name"] == component
         assert container["args"] == [component]
         assert container["image"] == "registry.example.com/agents-app-connector:1.2.3"
-        assert container["ports"] == [{"name": "http", "containerPort": port, "protocol": "TCP"}]
+        assert container["ports"][0] == {"name": "http", "containerPort": port, "protocol": "TCP"}
         assert container["readinessProbe"]["httpGet"] == {"path": "/readyz", "port": port}
         assert container["livenessProbe"]["httpGet"] == {"path": "/healthz", "port": port}
         assert spec["automountServiceAccountToken"] is False
@@ -117,12 +121,41 @@ def test_commands_ports_and_migrate_init():
     assert cm["data"]["APPCONN_HTTP_PORT"] == "8000"
     assert cm["data"]["APPCONN_DEVICE_PORT"] == "8001"
     assert cm["data"]["APPCONN_ORCHESTRATOR_URL"] == "http://orchestrator.example.com"
+    assert cm["data"]["APPCONN_ORCHESTRATOR_AGENT_URL"] == "http://orchestrator-agent.example.com"
+    assert cm["data"]["APPCONN_MCP_PORT"] == "8002"
+    assert main(docs, "admin")["ports"] == [
+        {"name": "http", "containerPort": 8000, "protocol": "TCP"}
+    ]
+    assert main(docs, "app")["ports"] == [
+        {"name": "http", "containerPort": 8001, "protocol": "TCP"},
+        {"name": "mcp", "containerPort": 8002, "protocol": "TCP"},
+    ]
+
+
+def test_mcp_service_is_cluster_internal_and_never_routed():
+    docs = render(INGRESSES)
+    svc = _by_name(docs, "Service")[f"{FULLNAME}-mcp"]
+    assert svc["spec"]["type"] == "ClusterIP"
+    assert [(p["name"], p["port"], p["targetPort"]) for p in svc["spec"]["ports"]] == [
+        ("mcp", 8002, "mcp")
+    ]
+    assert svc["spec"]["selector"]["app.kubernetes.io/component"] == "app"
+    backends = {
+        p["backend"]["service"]["name"]
+        for ing in _by_name(docs, "Ingress").values()
+        for rule in ing["spec"]["rules"]
+        for p in rule["http"]["paths"]
+    }
+    assert f"{FULLNAME}-mcp" not in backends
+    # a LoadBalancer or NodePort service type for the others never exposes the MCP port
+    exposed = render({"service": {"type": "NodePort"}})
+    assert _by_name(exposed, "Service")[f"{FULLNAME}-mcp"]["spec"]["type"] == "ClusterIP"
 
 
 def test_services_map_80_to_component_ports():
     docs = render()
     services = _by_name(docs, "Service")
-    assert sorted(services) == [f"{FULLNAME}-admin", f"{FULLNAME}-app"]
+    assert sorted(services) == [f"{FULLNAME}-admin", f"{FULLNAME}-app", f"{FULLNAME}-mcp"]
     for component, port in (("admin", 8000), ("app", 8001)):
         svc = services[f"{FULLNAME}-{component}"]
         assert [(p["port"], p["targetPort"]) for p in svc["spec"]["ports"]] == [(80, "http")]
@@ -333,6 +366,7 @@ def test_app_replicas_one_is_accepted():
             "only one of postgres.url and postgres.existingSecret",
         ),
         ({"orchestrator": {"url": ""}}, "orchestrator.url is required"),
+        ({"orchestrator": {"agentUrl": ""}}, "orchestrator.agentUrl is required"),
         ({"orchestrator": {"token": ""}}, "orchestrator token is required"),
         (
             {"orchestrator": {"existingSecret": "x"}},

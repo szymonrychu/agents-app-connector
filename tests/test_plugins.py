@@ -43,22 +43,9 @@ def test_attachments_are_agents_common_attachments():
     assert all(isinstance(a, Attachment) for a in out)
 
 
-def test_outbound_strips_fence_and_prose():
-    text = "Here it is\n```markdown\n---\nid: x\n---\n# T\n```"
-    assert PLUGIN.outbound(text) == ("---\nid: x\n---\n# T", True)
-
-
-def test_outbound_plain_fence_and_no_close():
-    assert PLUGIN.outbound("```\n---\nid: x\n# T\n```") == ("---\nid: x\n# T", False)
-
-
-def test_outbound_without_front_matter():
-    assert PLUGIN.outbound("# T") == ("# T", False)
-
-
-def test_outbound_keeps_inner_fences():
-    text = "---\nid: x\n---\n# T\n```text\nbox\n```"
-    assert PLUGIN.outbound(text) == (text, True)
+def test_plugin_has_no_reply_parser():
+    assert not hasattr(PLUGIN, "outbound")
+    assert "outbound" not in plugins.ClientPlugin.__dict__
 
 
 def test_preset_model_and_prompt():
@@ -85,7 +72,7 @@ def test_preset_keys_valid_for_session_spec():
         "peers",
         "wrapper",
     }
-    assert set(spec["wrapper"]) <= {"system_append", "permissions"}
+    assert set(spec["wrapper"]) <= {"system_append", "permissions", "mcp_servers"}
 
 
 def test_text_is_ascii():
@@ -107,7 +94,22 @@ def test_preset_is_read_only_without_network():
         "WebSearch",
         "Task",
         "Agent",
-        "mcp__*",
+        "mcp__any-mcp__*",
+        "mcp__ccw__*",
+        "mcp__plugin_*",
+        "mcp__claude_ai_*",
     ):
         assert tool in perms["deny"]
+    assert "mcp__*" not in perms["deny"]
+    assert not any(d.startswith("mcp__appconn") for d in perms["deny"])
     assert load_preset()["spec"]["peers"] is False
+
+
+def test_preset_points_the_translator_at_the_connector_mcp_server():
+    servers = load_preset()["spec"]["wrapper"]["mcp_servers"]
+    assert list(servers) == ["appconn"]
+    assert servers["appconn"] == {
+        "type": "http",
+        "url": "@mcp_url",
+        "headers": {"Authorization": "Bearer ${ORCH_AGENT_TOKEN}"},
+    }

@@ -1,5 +1,6 @@
 """Upload to spec to feedback to hand-off, end to end: real Postgres, FakeOrchestrator, the
-admin and device apps over httpx, and the worker and tracker ticked by hand."""
+admin, device and translator tool (MCP) apps over httpx, a fake translator calling the tools,
+and the worker and tracker ticked by hand."""
 
 import asyncio
 import json
@@ -15,12 +16,47 @@ from agents_app_connector.api.admin import create_admin_app
 from agents_app_connector.api.device import create_device_app
 from agents_app_connector.plugins.sketch import PLUGIN, task_routes
 from agents_app_connector.tracker import Tracker
+from agents_app_connector.translator_tools import build_mcp_app
 from agents_app_connector.worker import Worker
 
 pytestmark = pytest.mark.e2e
 
-SPEC_V1 = "---\nid: a\ntitle: T\n---\n# Box A"
-SPEC_V2 = "---\nid: a\ntitle: T\n---\n# Box B"
+SPEC_V1 = "BOX A"
+SPEC_V2 = "BOX B"
+REPLY = "Stored."
+MCP_HEADERS = {
+    "accept": "application/json, text/event-stream",
+    "content-type": "application/json",
+    "mcp-protocol-version": "2025-06-18",
+}
+
+
+class FakeTranslator:
+    """The translator session: calls the connector's MCP tools with its agent token."""
+
+    def __init__(self, mcp_app, token):
+        self.app = mcp_app
+        self.token = token
+
+    async def call(self, name, **arguments):
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+        headers = {**MCP_HEADERS, "authorization": f"Bearer {self.token}"}
+        async with (
+            self.app.router.lifespan_context(self.app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.app), base_url="http://mcp"
+            ) as c,
+        ):
+            r = await c.post("/mcp", headers=headers, json=body)
+        assert r.status_code == 200, r.text
+        result = r.json()["result"]
+        assert result["isError"] is False, result
+        return result["structuredContent"]
 
 
 async def pair(admin, api):
@@ -76,13 +112,33 @@ async def test_upload_to_spec_to_feedback_to_handoff(
         assert fake.messages[first]["session_id"] == session["id"]
         assert len(fake.messages[first]["attachments"]) == 2
 
-        # reply: spec v1 and its events
-        fake.complete_turn(first, SPEC_V1)
+        # the translator writes v1 and asks a question with its tools; the reply is ignored
+        agent_token = "agent-token-of-the-session"
+        sessions = {agent_token: uuid.UUID(session["id"])}
+
+        async def resolve(bearer_token):
+            return sessions.get(bearer_token)
+
+        translator = FakeTranslator(build_mcp_app(pool, s, resolve), agent_token)
+        assert (await translator.call("document_write", markdown=SPEC_V1))["version"] == 1
+        await translator.call("feedback_add", kind="question", text="Is A a button?", where="p1")
+        fake.complete_turn(first, REPLY)
         await t.tick()
         ev = await api.get(f"/conversations/{conv}/events?after=0", headers=bearer(token))
-        assert "spec" in [e["type"] for e in ev.json()["events"]]
+        types = [e["type"] for e in ev.json()["events"]]
+        assert "spec" in types and "feedback" in types
         spec = await api.get(f"/conversations/{conv}/spec", headers=bearer(token))
         assert spec.json()["version"] == 1 and spec.json()["markdown"] == SPEC_V1
+        notes = await api.get(f"/conversations/{conv}/feedback", headers=bearer(token))
+        (note,) = notes.json()["items"]
+        assert (note["kind"], note["text"], note["where"], note["spec_version"]) == (
+            "question",
+            "Is A a button?",
+            "p1",
+            1,
+        )
+        listed = await api.get("/conversations", headers=bearer(token))
+        assert listed.json()[0]["latest_feedback_id"] == note["id"]
 
         # feedback: follow-up in the same session, spec v2
         msg = await api.post(
@@ -95,7 +151,8 @@ async def test_upload_to_spec_to_feedback_to_handoff(
         second = max(fake.messages)
         assert second != first and fake.messages[second]["session_id"] == session["id"]
         assert "rename box A" in fake.messages[second]["text"]
-        fake.complete_turn(second, SPEC_V2)
+        assert (await translator.call("document_write", markdown=SPEC_V2))["version"] == 2
+        fake.complete_turn(second, REPLY)
         await t.tick()
         spec = await api.get(f"/conversations/{conv}/spec", headers=bearer(token))
         assert spec.json()["version"] == 2 and spec.json()["markdown"] == SPEC_V2

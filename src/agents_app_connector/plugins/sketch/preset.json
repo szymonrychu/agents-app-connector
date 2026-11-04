@@ -23,8 +23,20 @@
           "WebSearch",
           "Task",
           "Agent",
-          "mcp__*"
+          "mcp__any-mcp__*",
+          "mcp__ccw__*",
+          "mcp__plugin_*",
+          "mcp__claude_ai_*"
         ]
+      },
+      "mcp_servers": {
+        "appconn": {
+          "type": "http",
+          "url": "@mcp_url",
+          "headers": {
+            "Authorization": "Bearer ${ORCH_AGENT_TOKEN}"
+          }
+        }
       }
     }
   }

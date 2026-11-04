@@ -150,6 +150,7 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
                     "title": {"type": ["string", "null"]},
                     "created_at": {"type": "string", "format": "date-time"},
                     "latest_spec_version": {"type": ["integer", "null"]},
+                    "latest_feedback_id": {"type": ["integer", "null"]},
                 },
             },
         },
@@ -202,6 +203,18 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
         "one spec version",
         "application/json",
         {"$ref": "#/components/schemas/Spec"},
+    ),
+    ("get", "/conversations/{conversation_id}/feedback"): (
+        "200",
+        "translator feedback items after the cursor, oldest first (at most 100)",
+        "application/json",
+        {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"$ref": "#/components/schemas/Feedback"}},
+                "cursor": INT,
+            },
+        },
     ),
     ("get", "/attachments/{attachment_id}"): (
         "200",
@@ -326,13 +339,17 @@ EXTRA_SCHEMAS: dict[str, Any] = {
         "type": "object",
         "title": "Event",
         "description": (
-            "type is sketch_status, spec, message or handoff; the remaining fields depend on "
-            "the type (sketch_id or message_id or handoff_id, status, reason, session_slug)."
+            "type is sketch_status, spec, message, handoff or feedback; the remaining fields "
+            "depend on the type (sketch_id or message_id or handoff_id, status, reason, "
+            "session_slug, version, feedback_id and kind)."
         ),
         "required": ["cursor", "type", "created_at"],
         "properties": {
             "cursor": INT,
-            "type": {"type": "string", "enum": ["sketch_status", "spec", "message", "handoff"]},
+            "type": {
+                "type": "string",
+                "enum": ["sketch_status", "spec", "message", "handoff", "feedback"],
+            },
             "created_at": {"type": "string", "format": "date-time"},
         },
         "additionalProperties": True,
@@ -346,6 +363,24 @@ EXTRA_SCHEMAS: dict[str, Any] = {
             "markdown": STR,
             "created": {"type": "string", "format": "date-time"},
             "sketch_ids": {"type": "array", "items": UUID},
+        },
+    },
+    "Feedback": {
+        "type": "object",
+        "title": "Feedback",
+        "description": (
+            "Something the translator tells the user about the sketch, kept apart from the "
+            "document. spec_version is the version written by the same turn, null when the turn "
+            "wrote none."
+        ),
+        "required": ["id", "kind", "text", "where", "spec_version", "created_at"],
+        "properties": {
+            "id": INT,
+            "kind": {"type": "string", "enum": ["question", "uncertain", "illegible", "note"]},
+            "text": STR,
+            "where": {"type": ["string", "null"]},
+            "spec_version": {"type": ["integer", "null"]},
+            "created_at": {"type": "string", "format": "date-time"},
         },
     },
     "SketchUpload": {
@@ -384,6 +419,7 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/conversations/{conversation_id}/spec"): (401, 404, 429),
     ("get", "/conversations/{conversation_id}/spec.md"): (401, 404, 429),
     ("get", "/conversations/{conversation_id}/spec/{version}"): (401, 404, 422, 429),
+    ("get", "/conversations/{conversation_id}/feedback"): (401, 404, 422, 429),
     ("get", "/attachments/{attachment_id}"): (401, 404, 410, 429),
     ("get", "/handoff/targets"): (401, 429, 502, 503),
     ("get", "/tasks"): (401, 422, 429, 503),
@@ -423,6 +459,7 @@ SUMMARIES = {
     "/conversations/{conversation_id}/spec": "Latest spec as JSON",
     "/conversations/{conversation_id}/spec.md": "Latest spec as markdown",
     "/conversations/{conversation_id}/spec/{version}": "One spec version",
+    "/conversations/{conversation_id}/feedback": "Translator feedback after a cursor",
     "/attachments/{attachment_id}": "Download a stored sketch file",
     "/handoff/targets": "Sessions and presets a spec can be handed to",
     "/conversations/{conversation_id}/handoff": "Hand the latest spec to a session",

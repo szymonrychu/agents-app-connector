@@ -1,7 +1,7 @@
-"""Sketch plugin (Boox sketch translator): prompt, attachments and outbound cleanup."""
+"""Sketch plugin (Boox sketch translator): prompt and attachments. The translator writes the
+document and its feedback with its MCP tools (`translator_tools`); its reply text is discarded."""
 
 import json
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,7 +13,10 @@ if TYPE_CHECKING:
     from agents_app_connector.plugins import PluginDeps, TurnInput
 
 HERE = Path(__file__).parent
-FINAL_LINE = "Reply with only the markdown spec."
+FINAL_LINE = (
+    "Write the document with document_write and anything else with feedback_add. "
+    "Your reply text is discarded."
+)
 MISSING_FILE = "(sketch file no longer stored)"
 
 
@@ -37,33 +40,6 @@ def _image_detail(annotated, note, page: int) -> str:
         return f"page {page}"
     first, last = note.lines
     return f"spec v{annotated[0]}, document page {note.doc_page}, source lines {first}-{last}"
-
-
-_KEY_LINE = re.compile(r"^[A-Za-z_][\w-]*\s*:")
-
-
-def _front_matter_start(lines: list[str]) -> int | None:
-    """Index of the opening `---` of the front matter: the first `---` followed by a `key:`
-    line (so a prose rule before it is skipped), else the first `---` at all."""
-    rules = [i for i, line in enumerate(lines) if line.strip() == "---"]
-    for i in rules:
-        if i + 1 < len(lines) and _KEY_LINE.match(lines[i + 1]):
-            return i
-    return rules[0] if rules else None
-
-
-def _strip_to_front_matter(text: str) -> str:
-    lines = text.strip().splitlines()
-    start = _front_matter_start(lines)
-    if start is not None:
-        fenced = start > 0 and lines[start - 1].lstrip().startswith("```")
-        lines = lines[start:]
-        if fenced and lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-    if lines and lines[0].lstrip().startswith("```") and lines[-1].strip() == "```":
-        lines = lines[1:-1]
-    return "\n".join(lines).strip()
 
 
 class SketchPlugin:
@@ -104,13 +80,13 @@ class SketchPlugin:
             parts.append(
                 f"These images are spec version {n} rendered as pages with the user's "
                 "handwritten notes over them. Printed text is the spec; handwriting, marks and "
-                f"shapes are the notes. Apply the notes to spec version {n} and return the full "
-                "revised spec."
+                f"shapes are the notes. Apply the notes to spec version {n} and call "
+                "document_write with the full revised document."
             )
         if turn.caption:
             parts.append(f"Caption: {turn.caption}")
         if turn.text:
-            parts.append(f"User feedback: {turn.text}")
+            parts.append(f"User notes: {turn.text}")
         if annotated is not None:
             version, markdown = annotated
             parts.append(f"Spec version {version}:\n```markdown\n{markdown.strip()}\n```")
@@ -119,14 +95,6 @@ class SketchPlugin:
             parts.append(f"Previous spec version {version}:\n```markdown\n{markdown.strip()}\n```")
         parts.append(FINAL_LINE)
         return "\n\n".join(parts)
-
-    def outbound(self, final_text: str) -> tuple[str, bool]:
-        text = _strip_to_front_matter(final_text)
-        lines = text.split("\n")
-        has_front = (
-            lines[0] == "---" and len(lines) > 1 and any(x.strip() == "---" for x in lines[1:])
-        )
-        return text, has_front
 
 
 PLUGIN = SketchPlugin()

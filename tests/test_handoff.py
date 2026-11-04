@@ -45,7 +45,7 @@ async def conv(upload, pool):
 
 async def add_spec(pool, conv_id, markdown=SPEC):
     async with pool.connection() as c:
-        return await specs.add(c, uuid.UUID(conv_id), markdown, None, [], True)
+        return await specs.add(c, uuid.UUID(conv_id), markdown, None, [], None)
 
 
 def target_session(fake, preset, slug="review-1"):

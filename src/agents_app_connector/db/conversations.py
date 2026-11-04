@@ -18,11 +18,13 @@ class ConversationRow:
     created_at: datetime
     updated_at: datetime
     latest_spec_version: int | None = None
+    latest_feedback_id: int | None = None
 
 
 _SELECT = (
     "SELECT c.id, c.device_id, c.plugin, c.title, c.state, c.created_at, c.updated_at, "
-    "(SELECT max(s.version) FROM specs s WHERE s.conversation_id = c.id) AS latest_spec_version "
+    "(SELECT max(s.version) FROM specs s WHERE s.conversation_id = c.id) AS latest_spec_version, "
+    "(SELECT max(f.id) FROM feedback f WHERE f.conversation_id = c.id) AS latest_feedback_id "
     "FROM conversations c"
 )
 

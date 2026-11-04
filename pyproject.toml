@@ -12,6 +12,7 @@ dependencies = [
     "pillow",
     "uvicorn[standard]",
     "httpx",
+    "fastmcp>=4.1,<5",
 ]
 
 [project.scripts]

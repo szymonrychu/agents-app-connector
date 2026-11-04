@@ -1,0 +1,12 @@
+{
+  "words": [
+    "login",
+    "email",
+    "password",
+    "sign",
+    "in"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8,
+  "min_precision": 0.95
+}

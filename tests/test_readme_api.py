@@ -30,8 +30,9 @@ def readme_routes() -> set[str]:
 
 def test_readme_lists_every_route():
     expected = {k for k in route_keys() if " /app/" in k}
-    # 17 earlier routes, 8 task relay routes, the task stream, the code route and the exchange
-    assert len(expected) == 28
+    # 17 earlier routes, 8 task relay routes, the task stream, the code route, the exchange
+    # and the feedback route
+    assert len(expected) == 29
     assert expected - readme_routes() == set(), "undocumented routes"
     assert readme_routes() - expected == set(), "README documents routes the app lacks"
 

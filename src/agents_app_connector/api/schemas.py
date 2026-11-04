@@ -12,19 +12,44 @@ class PairRequest(BaseModel):
     plugin: str = "sketch"
 
 
-class PairResponse(BaseModel):
+class CodeResponse(BaseModel):
+    code: str
+    expires_at: datetime
+    expires_in: int
+
+
+class PairResponse(CodeResponse):
     device_id: uuid.UUID
     name: str
     plugin: str
-    token: str
 
 
 class DeviceOut(BaseModel):
     device_id: uuid.UUID
     name: str
     plugin: str
+    state: Literal["pending", "active", "revoked"]
     created_at: datetime
     revoked_at: datetime | None
+    paired_at: datetime | None
+    paired_ip: str | None
+    code_status: Literal["pending", "redeemed", "expired", "superseded", "locked"] | None
+    code_expires_at: datetime | None
+
+
+class ExchangeRequest(BaseModel):
+    """Body of the public pairing exchange: exactly six digits."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class ExchangeResponse(BaseModel):
+    device_id: uuid.UUID
+    name: str
+    plugin: str
+    token: str
 
 
 class Canvas(BaseModel):

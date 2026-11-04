@@ -5,9 +5,21 @@ import uuid
 
 import httpx
 import pytest
-from helpers import CANVAS, PREFIX, bearer, count, files, meta, pages, png, post, stored_files
+from helpers import (
+    CANVAS,
+    PREFIX,
+    bearer,
+    count,
+    files,
+    meta,
+    pages,
+    paired,
+    png,
+    post,
+    stored_files,
+)
 
-from agents_app_connector.db import devices
+from agents_app_connector.db import device_tokens
 from agents_app_connector.plugins.sketch import router as sketch_router
 
 
@@ -53,7 +65,7 @@ async def test_same_client_id_other_payload_422(device_api, token, conn):
 
 
 async def test_in_progress_duplicate_409(device_api, token, conn):
-    device = await devices.by_token(conn, token)
+    device = await device_tokens.by_token(conn, token)
     m = meta()
     client_id = json.loads(m)["client_id"]
     await conn.execute(
@@ -256,7 +268,7 @@ async def test_conversation_id_targets_older_conversation(device_api, token, con
 
 
 async def test_conversation_id_foreign_404(device_api, token, conn):
-    other = (await devices.create(conn, "sketch", "other"))[1]
+    other = (await paired(conn, "sketch", "other"))[1]
     foreign = (await post(device_api, other, meta(conversation="new"))).json()["conversation_id"]
     for cid in (foreign, str(uuid.uuid4())):
         r = await post(device_api, token, meta(conversation_id=cid))
@@ -359,7 +371,7 @@ async def test_plain_upload_unchanged_without_annotates(device_api, token, conn)
 
 
 async def test_annotated_upload_to_other_device_conversation_404_not_found(device_api, token, conn):
-    other = (await devices.create(conn, "sketch", "other"))[1]
+    other = (await paired(conn, "sketch", "other"))[1]
     foreign = await _conv_with_spec(device_api, other, conn)
     r = await post(device_api, token, meta(conversation_id=foreign, annotates=_annotates(1)))
     assert r.status_code == 404 and r.json()["error"] == "not_found"

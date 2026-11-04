@@ -15,7 +15,7 @@ from agents_common.runtime import advisory_singleton
 
 from agents_app_connector.api.device import create_device_app
 from agents_app_connector.plugins import REGISTRY
-from agents_app_connector.retention import Retention
+from agents_app_connector.retention import PairingSweep, Retention
 from agents_app_connector.serve import serve_asgi
 from agents_app_connector.settings import Settings
 from agents_app_connector.storage import AttachmentStore
@@ -66,6 +66,7 @@ async def run_app(
         units = {
             "worker": Worker(orchestrator, pool, settings, store),
             "tracker": Tracker(orchestrator, pool, settings),
+            "pairing-sweep": PairingSweep(pool),
             "retention": Retention(pool, store, retention_days=settings.retention_days),
         }
         async with advisory_singleton(pool, SINGLETON_KEY):

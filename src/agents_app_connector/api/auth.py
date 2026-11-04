@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import Request
 
 from agents_app_connector.api.errors import ApiError
-from agents_app_connector.db import devices
+from agents_app_connector.db import device_tokens
 from agents_app_connector.db.devices import DeviceRow
 
 
@@ -30,7 +30,7 @@ async def active_device(request: Request, plugin_id: str) -> DeviceRow:
     if token is None:
         raise _unauthorized()
     async with request.app.state.pool.connection() as conn:
-        row = await devices.by_token(conn, token)
+        row = await device_tokens.by_token(conn, token)
     if row is None or row.plugin != plugin_id:
         raise _unauthorized()
     return row

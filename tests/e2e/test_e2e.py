@@ -23,6 +23,15 @@ SPEC_V1 = "---\nid: a\ntitle: T\n---\n# Box A"
 SPEC_V2 = "---\nid: a\ntitle: T\n---\n# Box B"
 
 
+async def pair(admin, api):
+    """Create a device through the admin API and exchange its code: `(token, device_id)`."""
+    created = await admin.post("/devices", json={"name": "boox"})
+    assert created.status_code == 201
+    exchanged = await api.post("/pair", json={"code": created.json()["code"]})
+    assert exchanged.status_code == 200, exchanged.text
+    return exchanged.json()["token"], created.json()["device_id"]
+
+
 async def test_upload_to_spec_to_feedback_to_handoff(
     pool, settings, store, orchestrator, fake, preset, conn
 ):
@@ -54,9 +63,7 @@ async def test_upload_to_spec_to_feedback_to_handoff(
             transport=httpx.ASGITransport(app=device_app), base_url="http://dev" + PREFIX
         ) as api,
     ):
-        paired = await admin.post("/devices", json={"name": "boox"})
-        assert paired.status_code == 201
-        token = paired.json()["token"]
+        token, _ = await pair(admin, api)
         w, t = worker(), tracker()
 
         # upload, dispatch: one session, one message with two attachments
@@ -138,7 +145,7 @@ async def test_dispatch_marker_survives_restart(
             transport=httpx.ASGITransport(app=device_app), base_url="http://dev" + PREFIX
         ) as api,
     ):
-        token = (await admin.post("/devices", json={"name": "boox"})).json()["token"]
+        token, _ = await pair(admin, api)
         assert (await post(api, token, meta(), files())).status_code == 202
         await Worker(orchestrator, pool, settings, store).tick()
         (mid,) = fake.messages
@@ -206,8 +213,7 @@ async def test_e2e_task_relay(pool, settings, store, orchestrator, monkeypatch):
             timeout=20,
         ) as api,
     ):
-        paired = await admin.post("/devices", json={"name": "boox"})
-        token, device_id = paired.json()["token"], paired.json()["device_id"]
+        token, device_id = await pair(admin, api)
 
         listed = await api.get("/tasks?status=active&label=a", headers=bearer(token))
         assert listed.status_code == 200 and listed.json()["items"][0]["key"] == "T-1"

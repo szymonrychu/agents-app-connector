@@ -1,9 +1,10 @@
 import httpx
 import pytest
 from fastapi import Request
+from helpers import paired
 
 from agents_app_connector.api.device import create_device_app
-from agents_app_connector.db import devices
+from agents_app_connector.db import device_tokens, devices
 from agents_app_connector.plugins.sketch.router import build_router
 
 PREFIX = "/app/v1/sketch"
@@ -58,7 +59,7 @@ async def device_api(make_app):
 
 @pytest.fixture
 async def token(conn):
-    return (await devices.create(conn, "sketch", "boox"))[1]
+    return (await paired(conn, "sketch", "boox"))[1]
 
 
 async def test_config_requires_token(device_api):
@@ -82,13 +83,13 @@ async def test_bad_tokens_one_body(device_api, token, header):
 
 async def test_revoked_token_401_at_once(device_api, token, conn):
     assert (await device_api.get("/config", headers=bearer(token))).status_code == 200
-    row = await devices.by_token(conn, token)
+    row = await device_tokens.by_token(conn, token)
     assert await devices.revoke(conn, row.id)
     assert (await device_api.get("/config", headers=bearer(token))).status_code == 401
 
 
 async def test_other_plugin_token_401(device_api, conn):
-    _, other = await devices.create(conn, "other", "x")
+    _, other = await paired(conn, "other", "x")
     assert (await device_api.get("/config", headers=bearer(other))).status_code == 401
 
 
@@ -104,7 +105,7 @@ async def test_rate_limit_429(make_app, token):
 
 
 async def test_rate_limit_is_per_device(make_app, token, conn):
-    _, other = await devices.create(conn, "sketch", "second")
+    _, other = await paired(conn, "sketch", "second")
     async with make_client(make_app(rate_per_minute=1)) as c:
         assert (await c.get("/config", headers=bearer(token))).status_code == 200
         assert (await c.get("/config", headers=bearer(token))).status_code == 429

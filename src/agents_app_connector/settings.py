@@ -44,12 +44,18 @@ class Settings(BaseServiceSettings):
     max_text_chars: int = 8000
     taskboard_url: str | None = None
     taskboard_token: SecretStr | None = Field(None, repr=False)
+    pairing_code_ttl_seconds: int = Field(600, ge=60, le=1800)
+    pairing_max_failures: int = Field(5, ge=1, le=10)
+    pairing_max_pending: int = Field(3, ge=1, le=20)
+    pairing_ip_per_minute: int = Field(5, ge=1)
+    pairing_global_per_minute: int = Field(30, ge=1)
+    trusted_proxy_cidrs: CsvList = []
 
     @property
     def max_body_bytes(self) -> int:
         return self.max_upload_bytes + self.max_meta_bytes + 65536
 
-    @field_validator("admin_allowed_cidrs")
+    @field_validator("admin_allowed_cidrs", "trusted_proxy_cidrs")
     @classmethod
     def _cidrs(cls, value: list[str], info: ValidationInfo) -> list[str]:
         for item in value:
@@ -102,6 +108,9 @@ class Settings(BaseServiceSettings):
         if self.device_port == self.http_port:
             raise ValueError("APPCONN_DEVICE_PORT::must differ from APPCONN_HTTP_PORT")
         return self
+
+    def trusted_proxy_networks(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+        return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]
 
     def admin_networks(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         return [ipaddress.ip_network(c, strict=False) for c in self.admin_allowed_cidrs]

@@ -1,9 +1,7 @@
 import uuid
 
 import httpx
-from helpers import PREFIX, bearer, count, files, meta, post, stored_files
-
-from agents_app_connector.db import devices
+from helpers import PREFIX, bearer, count, files, meta, paired, post, stored_files
 
 
 async def msg(api, token, cid, text="hello", client_id=None):
@@ -67,7 +65,7 @@ async def test_message_text_bounds(make_app, token):
 
 
 async def test_message_needs_owned_conversation_404(device_api, token, conn):
-    _, other = await devices.create(conn, "sketch", "other")
+    _, other = await paired(conn, "sketch", "other")
     cid = (await device_api.post("/conversations", headers=bearer(other))).json()["id"]
     r = await msg(device_api, token, cid)
     assert r.status_code == 404
@@ -76,7 +74,7 @@ async def test_message_needs_owned_conversation_404(device_api, token, conn):
 
 
 async def test_other_devices_conversation_hidden_and_undeletable(device_api, token, conn):
-    _, other = await devices.create(conn, "sketch", "other")
+    _, other = await paired(conn, "sketch", "other")
     cid = (await device_api.post("/conversations", headers=bearer(other))).json()["id"]
     assert (await device_api.get("/conversations", headers=bearer(token))).json() == []
     assert (

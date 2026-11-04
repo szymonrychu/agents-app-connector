@@ -4,10 +4,9 @@ import pytest
 from agents_common.db.pool import open_pool
 from agents_common.fake_orchestrator import FakeOrchestrator
 from agents_common.orchestrator import OrchestratorClient
-from helpers import PREFIX, Sketch, bearer, files, meta, png, post
+from helpers import PREFIX, Sketch, bearer, files, meta, paired, png, post
 
 from agents_app_connector.api.device import create_device_app
-from agents_app_connector.db import devices
 from agents_app_connector.settings import Settings
 from agents_app_connector.storage import AttachmentStore
 
@@ -86,7 +85,7 @@ async def device_api(make_app):
 
 @pytest.fixture
 async def token(conn):
-    return (await devices.create(conn, "sketch", "boox"))[1]
+    return (await paired(conn, "sketch", "boox"))[1]
 
 
 @pytest.fixture

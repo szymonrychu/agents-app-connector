@@ -1,6 +1,8 @@
 import uuid
 
-from agents_app_connector.db import conversations, devices, inbound
+from helpers import paired
+
+from agents_app_connector.db import conversations, inbound
 
 
 def test_fingerprint_canonical():
@@ -28,7 +30,7 @@ async def make(conn, conv, dev, kind="message"):
 
 
 async def setup(conn):
-    dev, _ = await devices.create(conn, "sketch", "d")
+    dev, _ = await paired(conn, "sketch", "d")
     return dev.id, await conversations.create(conn, dev.id, "sketch")
 
 

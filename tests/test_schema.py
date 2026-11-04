@@ -5,6 +5,8 @@ import pytest
 
 TABLES = {
     "devices": "writer: admin",
+    "device_tokens": "writer: app",
+    "pairing_codes": "queue: insert by admin, transitions by app",
     "conversations": "writer: app",
     "inbound": "queue: insert by app api, transitions by app worker",
     "attachments": "writer: app",
@@ -20,10 +22,7 @@ SHA = "a" * 64
 
 async def _device(conn):
     did = uuid.uuid4()
-    await conn.execute(
-        "INSERT INTO devices (id, plugin, name, token_sha256) VALUES (%s, 'sketch', 'd', %s)",
-        (did, uuid.uuid4().hex * 2),
-    )
+    await conn.execute("INSERT INTO devices (id, plugin, name) VALUES (%s, 'sketch', 'd')", (did,))
     return did
 
 
@@ -92,8 +91,7 @@ async def test_constraints_and_cascade(conn):
     did = await _device(conn)
     with pytest.raises(psycopg.errors.CheckViolation):
         await conn.execute(
-            "INSERT INTO devices (id, plugin, name, token_sha256) VALUES (%s, 'sketch', 'd', 'zz')",
-            (uuid.uuid4(),),
+            "INSERT INTO device_tokens (device_id, token_sha256) VALUES (%s, 'zz')", (did,)
         )
     cid = await _conversation(conn, did)
     iid = uuid.uuid4()

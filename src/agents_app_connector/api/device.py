@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 
@@ -20,6 +21,7 @@ def create_device_app(
     plugins: Sequence[ClientPlugin],
     store,
     orchestrator=None,
+    taskboard: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     limiter = RateLimiter(settings.rate_per_minute)
     hub = EventHub(settings.database_url.get_secret_value(), pool, settings.poll_seconds)
@@ -48,6 +50,7 @@ def create_device_app(
         limiter=limiter,
         hub=hub,
         orchestrator=orchestrator,
+        taskboard=taskboard,
     )
     for plugin in plugins:
         app.include_router(plugin.router(deps), prefix=plugin.prefix)

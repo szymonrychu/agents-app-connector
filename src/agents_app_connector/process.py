@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import logging
 
+import httpx
 from agents_common.db.pool import open_pool
 from agents_common.orchestrator import OrchestratorClient
 from agents_common.runtime import advisory_singleton
@@ -24,6 +25,7 @@ from agents_app_connector.worker import Worker
 log = logging.getLogger(__name__)
 
 SINGLETON_KEY = "agents-app-connector-app"
+TASKBOARD_TIMEOUT_SECONDS = 10.0
 
 
 async def _loop(name: str, unit, interval: float, stop: asyncio.Event) -> None:
@@ -50,10 +52,17 @@ async def run_app(
         orchestrator = OrchestratorClient(
             settings.orchestrator_url, settings.orchestrator_token.get_secret_value()
         )
+    taskboard = (
+        httpx.AsyncClient(base_url=settings.taskboard_url, timeout=TASKBOARD_TIMEOUT_SECONDS)
+        if settings.taskboard_url
+        else None
+    )
     try:
         store = AttachmentStore(settings.data_dir)
         plugins = list(REGISTRY.values())
-        app = create_device_app(pool, settings, plugins, store, orchestrator=orchestrator)
+        app = create_device_app(
+            pool, settings, plugins, store, orchestrator=orchestrator, taskboard=taskboard
+        )
         units = {
             "worker": Worker(orchestrator, pool, settings, store),
             "tracker": Tracker(orchestrator, pool, settings),
@@ -82,6 +91,8 @@ async def run_app(
                 stop.set()
                 await asyncio.gather(*tasks, return_exceptions=True)
     finally:
+        if taskboard is not None:
+            await taskboard.aclose()
         if owned:
             await orchestrator.aclose()
         await pool.close()

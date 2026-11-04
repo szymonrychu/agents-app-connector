@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+import httpx
 from agents_common.orchestrator import Attachment
 from fastapi import APIRouter
 from psycopg_pool import AsyncConnectionPool
@@ -22,6 +23,7 @@ class PluginDeps:
     limiter: RateLimiter
     hub: EventHub
     orchestrator: Any = None
+    taskboard: httpx.AsyncClient | None = None
 
 
 @dataclass(frozen=True)

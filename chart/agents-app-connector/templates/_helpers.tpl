@@ -108,6 +108,33 @@ token
 {{- end -}}
 {{- end }}
 
+{{/*
+Name of the Secret holding the taskboard delegate token, empty when the relay is not configured.
+Fails unless url and exactly one token source are set together.
+*/}}
+{{- define "agents-app-connector.taskboardSecretName" -}}
+{{- $t := .Values.taskboard -}}
+{{- if and $t.token $t.existingSecret -}}
+{{- fail "agents-app-connector: set only one of taskboard.token and taskboard.existingSecret" -}}
+{{- else if and $t.url (not (or $t.token $t.existingSecret)) -}}
+{{- fail "agents-app-connector: taskboard.url requires taskboard.token or taskboard.existingSecret" -}}
+{{- else if and (or $t.token $t.existingSecret) (not $t.url) -}}
+{{- fail "agents-app-connector: taskboard.token or taskboard.existingSecret requires taskboard.url" -}}
+{{- else if $t.existingSecret -}}
+{{- $t.existingSecret -}}
+{{- else if $t.token -}}
+{{- include "agents-app-connector.fullname" . }}-taskboard
+{{- end -}}
+{{- end }}
+
+{{- define "agents-app-connector.taskboardSecretKey" -}}
+{{- if .Values.taskboard.existingSecret -}}
+{{- .Values.taskboard.existingSecretKey | default "token" -}}
+{{- else -}}
+token
+{{- end -}}
+{{- end }}
+
 {{/* Name of the PVC the app pod mounts. */}}
 {{- define "agents-app-connector.claimName" -}}
 {{- default (printf "%s-data" (include "agents-app-connector.fullname" .)) .Values.persistence.existingClaim -}}
@@ -153,6 +180,15 @@ env:
 {{- if eq .component "app" }}
   - name: APPCONN_DATA_DIR
     value: /data
+{{- if include "agents-app-connector.taskboardSecretName" .context }}
+  - name: APPCONN_TASKBOARD_URL
+    value: {{ .context.Values.taskboard.url | quote }}
+  - name: APPCONN_TASKBOARD_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: {{ include "agents-app-connector.taskboardSecretName" .context }}
+        key: {{ include "agents-app-connector.taskboardSecretKey" .context }}
+{{- end }}
 {{- end }}
 {{- end }}
 
@@ -173,5 +209,6 @@ APPCONN_DEVICE_PORT: {{ .Values.components.app.port | int | toString | quote }}
 {{- define "agents-app-connector.validate" -}}
 {{- $_ := include "agents-app-connector.databaseSecretName" . }}
 {{- $_ := include "agents-app-connector.tokenSecretName" . }}
+{{- $_ := include "agents-app-connector.taskboardSecretName" . }}
 {{- $_ := include "agents-app-connector.appReplicas" . }}
 {{- end }}

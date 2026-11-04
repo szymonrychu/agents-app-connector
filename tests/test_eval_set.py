@@ -21,9 +21,11 @@ NAMES = [
     "08-mixed",
     "09-colour-shapes",
     "10-annotated-spec",
+    "11-bare-wireframe",
 ]
 COLOUR = "09-colour-shapes"
 ANNOTATED = "10-annotated-spec"
+BARE = "11-bare-wireframe"
 RGB_ITEMS = (COLOUR, ANNOTATED)
 
 
@@ -75,6 +77,7 @@ def test_items_valid_for_upload():
         assert expected["words"]
         assert expected["diagram"] in ("flowchart", "table", "sequenceDiagram", None)
         assert expected["min_word_recall"] == 0.8
+        assert expected["min_precision"] == (0.95 if name == BARE else 0.9)
 
 
 def test_annotated_item_regenerates_identically_with_base_page_and_spec(tmp_path):
@@ -103,15 +106,12 @@ def test_annotated_item_expected_has_must_keep():
     exp = json.loads((ROOT / "eval" / "expected" / "10-annotated-spec.json").read_text())
     assert exp["must_keep"] and exp["words"]
     assert not set(exp["must_keep"]) & {"call", "bob"}  # struck out in the page
-    for name in NAMES[:-1]:
+    for name in [n for n in NAMES if n != ANNOTATED]:
         other = json.loads((ROOT / "eval" / "expected" / f"{name}.json").read_text())
         assert "must_keep" not in other
 
 
-FRONT = (
-    "---\nid: abc\nsource_image: sketch-abc.png\ncreated: 2026-11-02T10:00:00Z\n"
-    "confidence: high\nunreadable_count: 0\n---\n# Title\n\n"
-)
+FRONT = ""
 
 
 def test_score_spec_recall_and_markers():
@@ -119,7 +119,6 @@ def test_score_spec_recall_and_markers():
     s = ev.score(FRONT + "Buy [[?milk]] and [[?egg|eggs]]\n", exp)
     assert s.recall == 0.75
     assert s.diagram_ok is True
-    assert s.front_matter is True
 
 
 def test_score_must_keep_missing_is_reported():
@@ -151,14 +150,39 @@ def test_score_spec_diagrams():
     assert not ev.score(mer, {**e, "diagram": "table"}).diagram_ok
 
 
-def test_score_spec_front_matter_missing_key():
-    bad = "---\nid: abc\n---\n# T\n"
-    s = ev.score(bad, {"words": ["t"], "diagram": None, "min_word_recall": 0.8})
-    assert s.front_matter is False
-    assert (
-        ev.score("# T\n", {"words": [], "diagram": None, "min_word_recall": 0.8}).front_matter
-        is False
+def test_score_precision_counts_only_drawn_words():
+    exp = {"words": ["login", "email", "password", "sign", "in"], "diagram": None}
+    assert ev.score("LOGIN\n\nEMAIL\n\nPASSWORD\n\n[ SIGN IN ]", exp).precision == 1.0
+    invented = ev.score(
+        "# Login\n\n## Requirements\n\n- Email field\n- Password field\n- Sign in", exp
     )
+    assert invented.precision == 5 / 8
+    assert invented.invented == ["requirements", "field"]
+    assert ev.score("", exp).precision == 1.0
+
+
+def test_score_precision_ignores_markers_and_diagram_syntax():
+    exp = {"words": ["start", "valid", "yes", "no", "save", "reject"], "diagram": "flowchart"}
+    md = (
+        "```mermaid\nflowchart TD\n  A[START] --> B{VALID?}\n  B -->|YES| C[SAVE]\n"
+        '  B -->|NO| D["REJECT"]\n  E[""]\n```\n\n[[?save|sove]] [[illegible]] [[red]] start\n'
+    )
+    assert ev.score(md, exp).precision == 1.0
+    seq = (
+        "```mermaid\nsequenceDiagram\n  participant C as CLIENT\n  participant SERVER\n"
+        "  C->>SERVER: LOGIN\n```\n"
+    )
+    assert ev.score(seq, {"words": ["client", "server", "login"], "diagram": None}).precision == 1.0
+    table = "| NAME | ROLE |\n|---|---|\n| ALICE | DEV |\n"
+    exp_t = {"words": ["name", "role", "alice", "dev"], "diagram": "table"}
+    assert ev.score(table, exp_t).precision == 1.0
+    wire = "```text\n+--------+\n| MENU   |\n+--------+\n```\n"
+    assert ev.score(wire, {"words": ["menu"], "diagram": None}).precision == 1.0
+
+
+def test_score_precision_counts_must_keep_as_drawn():
+    exp = {"words": ["bread"], "must_keep": ["milk"], "diagram": None}
+    assert ev.score("milk bread call", exp).precision == 2 / 3
 
 
 def _item_client(events, fail_get=False):
@@ -176,6 +200,10 @@ def _item_client(events, fail_get=False):
             if fail_get:
                 raise httpx.ConnectError("boom")
             return httpx.Response(200, json={"cursor": 1, "events": events})
+        if request.url.path.endswith("/feedback"):
+            after = int(request.url.params.get("after", 0))
+            items = [{"id": 1, "kind": "question", "text": "?"}] if after == 0 else []
+            return httpx.Response(200, json={"items": items, "cursor": 1})
         return httpx.Response(200, text="# T")
 
     return httpx.Client(transport=httpx.MockTransport(handler)), calls
@@ -215,14 +243,18 @@ def test_run_item_annotated_uploads_base_then_annotation():
         if request.url.path.endswith("/events"):
             done = {"type": "sketch_status", "status": "done"}
             return httpx.Response(200, json={"cursor": 2, "events": [done, done]})
-        return httpx.Response(200, text="---\nid: a\n---\n# T\n\nBuy milk\n")
+        if request.url.path.endswith("/feedback"):
+            return httpx.Response(200, json={"items": [], "cursor": 0})
+        return httpx.Response(
+            200, text="SHOPPING LIST\n\nBUY MILK\n\nBUY EGGS\n\nCALL BOB\n\nSHIP PARCEL\n"
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = ev.run_item(client, "http://x", ANNOTATED, 5)
     assert len(posts) == 2
     assert b"annotates" not in posts[0] and b'"conversation": "new"' in posts[0]
     assert b'"annotates"' in posts[1] and b'"spec_version": 1' in posts[1]
-    assert b'"conversation_id": "c1"' in posts[1] and b'"lines": [0, 5]' in posts[1]
+    assert b'"conversation_id": "c1"' in posts[1] and b'"lines": [0, 8]' in posts[1]
     assert result["status"] == "done" and "kept" in result
 
 
@@ -230,3 +262,18 @@ def test_run_item_plain_item_uploads_once():
     client, calls = _item_client([{"type": "sketch_status", "status": "done"}])
     ev.run_item(client, "http://x", "01-notes", 5)
     assert [c for c in calls if c[0] == "POST"] == [("POST", "/sketches")]
+
+
+def test_run_item_reports_precision_and_feedback_count_without_front_matter():
+    client, _ = _item_client([{"type": "sketch_status", "status": "done"}])
+    result = ev.run_item(client, "http://x", "01-notes", 5)
+    assert result["status"] == "done" and result["feedback"] == 1
+    assert "precision" in result and "front_matter" not in result
+    table = ev.format_table([result])
+    assert "precision" in table and "feedback" in table and "front_matter" not in table
+
+
+def test_bare_wireframe_item_has_four_labels_and_strict_precision():
+    exp = json.loads((ROOT / "eval" / "expected" / f"{BARE}.json").read_text())
+    assert exp["words"] == ["login", "email", "password", "sign", "in"]
+    assert exp["diagram"] is None and exp["min_precision"] == 0.95

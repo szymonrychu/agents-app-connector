@@ -7,6 +7,9 @@ built-in stroke table with Pillow ImageDraw primitives only, with per-glyph jitt
 baseline wobble to look hand drawn. Images are 8-bit grayscale `L`, long edge 1568, except
 09-colour-shapes and 10-annotated-spec, which are `RGB` (black, blue and red pens).
 
+11-bare-wireframe is a login wireframe with only four labels, the shape that invites invented
+requirements; its expected precision is stricter (0.95 instead of 0.9).
+
 10-annotated-spec also writes specs/10-annotated-spec.png (the page without notes, uploaded
 first to get spec v1) and specs/10-annotated-spec.md (the text it prints).
 """
@@ -27,6 +30,7 @@ W, H = 1568, 1176
 PEN = 4
 BLACK, BLUE, RED = (0, 0, 0), (0, 0, 255), (220, 0, 0)
 MIN_RECALL = 0.8
+MIN_PRECISION = 0.9
 
 _P = [(4, 1), (3, 0), (1, 0), (0, 1), (0, 5), (1, 6), (3, 6), (4, 5)]
 _O = [(1, 0), (3, 0), (4, 1), (4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0)]
@@ -112,6 +116,7 @@ class Sheet:
         self.base: Image.Image | None = None  # the page before the notes (annotated item)
         self.base_md = ""
         self.extra: dict[str, list[str]] = {}  # extra keys of the expected JSON
+        self.min_precision = MIN_PRECISION
 
     def _j(self, amount: float) -> float:
         return self.rng.uniform(-amount, amount)
@@ -343,6 +348,20 @@ def annotated_spec(rng: random.Random) -> Sheet:
     return s
 
 
+def bare_wireframe(rng: random.Random) -> Sheet:
+    """A login screen with four labels and nothing else: no requirements are written down."""
+    s = Sheet(rng)
+    s.rect(420, 60, 1148, 1116)
+    s.text(784, 160, "LOGIN", 64, center=True)
+    for i, label in enumerate(["EMAIL", "PASSWORD"]):
+        y = 360 + i * 260
+        s.text(500, y, label, 40)
+        s.rect(500, y + 70, 1068, y + 150)
+    s.labeled_box(600, 900, 968, 1010, "SIGN IN", 44)
+    s.min_precision = 0.95
+    return s
+
+
 ITEMS = [
     ("01-notes", notes, None),
     ("02-flowchart", flowchart, "flowchart"),
@@ -354,6 +373,7 @@ ITEMS = [
     ("08-mixed", mixed, "flowchart"),
     ("09-colour-shapes", colour_shapes, "flowchart"),
     ("10-annotated-spec", annotated_spec, None),
+    ("11-bare-wireframe", bare_wireframe, None),
 ]
 
 
@@ -366,7 +386,13 @@ def generate(out: Path) -> None:
         sheet = build(rng)
         sheet.img.save(out / "sketches" / f"{name}.png", "PNG")
         words = list(dict.fromkeys(sheet.words))
-        doc = {"words": words, "diagram": diagram, "min_word_recall": MIN_RECALL, **sheet.extra}
+        doc = {
+            "words": words,
+            "diagram": diagram,
+            "min_word_recall": MIN_RECALL,
+            "min_precision": sheet.min_precision,
+            **sheet.extra,
+        }
         (out / "expected" / f"{name}.json").write_text(json.dumps(doc, indent=2) + "\n")
         if sheet.base is not None:
             (out / "specs").mkdir(parents=True, exist_ok=True)

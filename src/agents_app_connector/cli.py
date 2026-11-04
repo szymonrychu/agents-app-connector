@@ -52,10 +52,7 @@ def _load_migrate() -> MigrateSettings:
 
 
 def _load_app() -> Settings:
-    settings = load_settings(Settings)
-    if not settings.orchestrator_agent_url:
-        raise SettingsError({"APPCONN_ORCHESTRATOR_AGENT_URL": "required by the app process"})
-    return settings
+    return load_settings(Settings)
 
 
 def _cmd_migrate(settings: MigrateSettings) -> int:

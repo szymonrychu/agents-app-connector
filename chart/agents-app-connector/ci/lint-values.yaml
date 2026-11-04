@@ -2,7 +2,6 @@ postgres:
   url: postgresql://user:password@db.example.com:5432/app
 orchestrator:
   url: http://orchestrator.example.com
-  agentUrl: http://orchestrator-agent.example.com
   token: lint-token
 ingress:
   device:

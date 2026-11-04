@@ -202,7 +202,6 @@ APPCONN_ORCHESTRATOR_URL: {{ required "orchestrator.url is required" .Values.orc
 APPCONN_HTTP_PORT: {{ .Values.components.admin.port | int | toString | quote }}
 APPCONN_DEVICE_PORT: {{ .Values.components.app.port | int | toString | quote }}
 APPCONN_MCP_PORT: {{ .Values.components.app.mcpPort | int | toString | quote }}
-APPCONN_ORCHESTRATOR_AGENT_URL: {{ required "orchestrator.agentUrl is required" .Values.orchestrator.agentUrl | quote }}
 {{- range $k, $v := .Values.env }}
 {{- if not (hasPrefix "APPCONN_" $k) }}
 {{- fail (printf "agents-app-connector: env key %q must start with APPCONN_" $k) }}

@@ -50,7 +50,6 @@ class Settings(BaseServiceSettings):
     pairing_ip_per_minute: int = Field(5, ge=1)
     pairing_global_per_minute: int = Field(30, ge=1)
     trusted_proxy_cidrs: CsvList = []
-    orchestrator_agent_url: str | None = None
     mcp_port: int = 8002
     max_document_bytes: int = Field(262144, ge=1024, le=1048576)
     max_feedback_per_run: int = Field(30, ge=1, le=200)
@@ -69,7 +68,7 @@ class Settings(BaseServiceSettings):
                 raise ValueError(f"{_var(info)}::not a CIDR: {item!r}") from None
         return value
 
-    @field_validator("taskboard_url", "orchestrator_agent_url")
+    @field_validator("taskboard_url")
     @classmethod
     def _http_url(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None:

@@ -172,7 +172,10 @@ def test_main_sends_the_filled_preset_and_requires_mcp_url(monkeypatch, capsys):
     assert code == 0 and capsys.readouterr().out.strip() == "created"
     server = bodies[0]["spec"]["wrapper"]["mcp_servers"]["appconn"]
     assert server["url"] == MCP
-    assert server["headers"] == {"Authorization": "Bearer ${ORCH_AGENT_TOKEN}"}
+    assert server["headers"] == {
+        "Authorization": "Bearer ${ORCH_AGENT_TOKEN}",
+        "X-Orch-Session": "${ORCH_SESSION_ID}",
+    }
     with pytest.raises(SystemExit):
         ensure.main(["--base-url", BASE])
 

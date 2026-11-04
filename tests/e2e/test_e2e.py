@@ -34,9 +34,10 @@ MCP_HEADERS = {
 class FakeTranslator:
     """The translator session: calls the connector's MCP tools with its agent token."""
 
-    def __init__(self, mcp_app, token):
+    def __init__(self, mcp_app, token, session_id):
         self.app = mcp_app
         self.token = token
+        self.session_id = session_id
 
     async def call(self, name, **arguments):
         body = {
@@ -45,7 +46,11 @@ class FakeTranslator:
             "method": "tools/call",
             "params": {"name": name, "arguments": arguments},
         }
-        headers = {**MCP_HEADERS, "authorization": f"Bearer {self.token}"}
+        headers = {
+            **MCP_HEADERS,
+            "authorization": f"Bearer {self.token}",
+            "x-orch-session": self.session_id,
+        }
         async with (
             self.app.router.lifespan_context(self.app),
             httpx.AsyncClient(
@@ -116,10 +121,10 @@ async def test_upload_to_spec_to_feedback_to_handoff(
         agent_token = "agent-token-of-the-session"
         sessions = {agent_token: uuid.UUID(session["id"])}
 
-        async def resolve(bearer_token):
-            return sessions.get(bearer_token)
+        async def verify(bearer_token, session_id):
+            return sessions.get(bearer_token) == session_id
 
-        translator = FakeTranslator(build_mcp_app(pool, s, resolve), agent_token)
+        translator = FakeTranslator(build_mcp_app(pool, s, verify), agent_token, session["id"])
         assert (await translator.call("document_write", markdown=SPEC_V1))["version"] == 1
         await translator.call("feedback_add", kind="question", text="Is A a button?", where="p1")
         fake.complete_turn(first, REPLY)

@@ -34,7 +34,8 @@
           "type": "http",
           "url": "@mcp_url",
           "headers": {
-            "Authorization": "Bearer ${ORCH_AGENT_TOKEN}"
+            "Authorization": "Bearer ${ORCH_AGENT_TOKEN}",
+            "X-Orch-Session": "${ORCH_SESSION_ID}"
           }
         }
       }

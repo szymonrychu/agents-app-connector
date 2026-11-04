@@ -1,9 +1,12 @@
 """The translator's MCP tools: identity, auth, turn scoping, versions, feedback and caps."""
 
+import hashlib
+import json
 import uuid
 
 import httpx
 import pytest
+from agents_common.orchestrator import OrchestratorClient
 from helpers import only, rows
 
 from agents_app_connector.db import specs
@@ -19,16 +22,16 @@ PROTOCOL = "2025-06-18"
 
 
 class Sessions:
-    """A fake identity: token -> session id, plus a switch that makes the orchestrator fail."""
+    """A fake verifier: token -> session id, plus a switch that makes the orchestrator fail."""
 
     def __init__(self):
         self.tokens: dict[str, uuid.UUID] = {}
         self.down = False
 
-    async def resolve(self, token):
+    async def verify(self, token, session_id):
         if self.down:
             raise IdentityUnavailable("HTTP 503")
-        return self.tokens.get(token)
+        return self.tokens.get(token) == session_id
 
 
 @pytest.fixture
@@ -40,8 +43,9 @@ class McpClient:
     """Posts to the MCP app, entering its lifespan per request: pytest-asyncio sets fixtures
     up and tears them down in different tasks, which the anyio task group refuses."""
 
-    def __init__(self, app):
+    def __init__(self, app, sessions):
         self.app = app
+        self.sessions = sessions
 
     async def post(self, path, **kwargs):
         async with (
@@ -55,13 +59,21 @@ class McpClient:
 
 @pytest.fixture
 def mcp(pool, settings, sessions):
-    return McpClient(build_mcp_app(pool, settings, sessions.resolve))
+    return McpClient(build_mcp_app(pool, settings, sessions.verify), sessions)
 
 
-async def rpc(client, token, method, params=None):
+NO_HEADER = object()
+
+
+async def rpc(client, token, method, params=None, session=None):
+    """`session` is the X-Orch-Session value: the token's session by default, NO_HEADER to omit."""
     headers = {**HEADERS, "mcp-protocol-version": PROTOCOL}
     if token is not None:
         headers["authorization"] = f"Bearer {token}"
+    if session is None:
+        session = client.sessions.tokens.get(token, uuid.uuid4())
+    if session is not NO_HEADER:
+        headers["x-orch-session"] = str(session)
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
     return await client.post("/mcp", headers=headers, json=body)
 
@@ -106,42 +118,80 @@ async def events_of(conn, conv):
 # identity
 
 
-def me_transport(calls, status=200, body=None):
+def verify_client(calls, owner=None, status=200, body=None):
+    """An OrchestratorClient on a mock service port: `owner` is the one session that accepts the
+    token; every other session answers the orchestrator's 404 `not_found`."""
+
     def handler(request):
-        calls.append(request.headers["authorization"])
+        calls.append((request.url.path, json.loads(request.content)["token"]))
         if isinstance(status, Exception):
             raise status
-        return httpx.Response(status, json=body if body is not None else {})
+        if status != 200:
+            return httpx.Response(status, json={})
+        sid = request.url.path.split("/")[4]
+        if str(owner) != sid:
+            return httpx.Response(404, json={"error": {"code": "not_found", "message": "x"}})
+        return httpx.Response(200, json=body if body is not None else {"session_id": sid})
 
-    return httpx.MockTransport(handler)
+    return OrchestratorClient("http://orch", "svc", transport=httpx.MockTransport(handler))
 
 
-async def test_identity_resolves_and_caches_by_token():
+async def test_identity_valid_token_is_one_verify_call_for_the_named_session():
     sid = uuid.uuid4()
     calls = []
-    now = {"t": 0.0}
-    client = httpx.AsyncClient(
-        base_url="http://orch-agent", transport=me_transport(calls, body={"session_id": str(sid)})
-    )
-    ident = OrchestratorIdentity(client, ttl=60, clock=lambda: now["t"])
+    client = verify_client(calls, owner=sid)
     token = "secret-token-xyz"
-    assert await ident.resolve(token) == sid
-    assert await ident.resolve(token) == sid
-    assert calls == [f"Bearer {token}"]
-    now["t"] = 61
-    assert await ident.resolve(token) == sid
-    assert len(calls) == 2
-    assert token not in repr(ident._cache)
+    assert await OrchestratorIdentity(client).verify(token, sid) is True
+    assert calls == [(f"/api/v1/sessions/{sid}/agent-token/verify", token)]
     await client.aclose()
 
 
-async def test_identity_refused_token_is_none_and_not_cached():
+async def test_identity_refused_token_is_false_and_not_cached():
     calls = []
-    client = httpx.AsyncClient(base_url="http://o", transport=me_transport(calls, status=401))
+    client = verify_client(calls, owner=None)
     ident = OrchestratorIdentity(client)
-    assert await ident.resolve("bad") is None
-    assert await ident.resolve("bad") is None
+    sid = uuid.uuid4()
+    assert await ident.verify("bad", sid) is False
+    assert await ident.verify("bad", sid) is False
     assert len(calls) == 2
+    assert ident._cache == {}
+    await client.aclose()
+
+
+async def test_identity_token_of_another_session_is_refused():
+    sid, other = uuid.uuid4(), uuid.uuid4()
+    client = verify_client([], owner=sid)
+    assert await OrchestratorIdentity(client).verify("t", other) is False
+    await client.aclose()
+
+
+async def test_identity_cache_hit_by_token_hash_and_session_expires_after_ttl():
+    sid, other = uuid.uuid4(), uuid.uuid4()
+    calls = []
+    now = {"t": 0.0}
+    client = verify_client(calls, owner=sid)
+    ident = OrchestratorIdentity(client, ttl=60, clock=lambda: now["t"])
+    token = "secret-token-xyz"
+    assert await ident.verify(token, sid) is True
+    assert await ident.verify(token, sid) is True
+    assert len(calls) == 1
+    assert list(ident._cache) == [(hashlib.sha256(token.encode()).hexdigest(), sid)]
+    assert token not in repr(ident._cache)
+    assert await ident.verify(token, other) is False
+    assert len(calls) == 2
+    now["t"] = 61
+    assert await ident.verify(token, sid) is True
+    assert len(calls) == 3
+    await client.aclose()
+
+
+async def test_identity_200_for_a_different_session_is_unavailable_not_accepted():
+    sid, other = uuid.uuid4(), uuid.uuid4()
+    client = verify_client([], owner=sid, body={"session_id": str(other)})
+    ident = OrchestratorIdentity(client)
+    with pytest.raises(IdentityUnavailable):
+        await ident.verify("tok-abc", sid)
+    assert ident._cache == {}
     await client.aclose()
 
 
@@ -149,15 +199,18 @@ async def test_identity_refused_token_is_none_and_not_cached():
     ("status", "body"),
     [
         (500, {}),
+        (401, {}),
         (200, {"nope": 1}),
         (200, {"session_id": "not-a-uuid"}),
         (httpx.ConnectError("x"), None),
     ],
 )
 async def test_identity_failure_is_unavailable(status, body):
-    client = httpx.AsyncClient(base_url="http://o", transport=me_transport([], status, body))
-    with pytest.raises(IdentityUnavailable):
-        await OrchestratorIdentity(client).resolve("t")
+    sid = uuid.uuid4()
+    client = verify_client([], owner=sid, status=status, body=body)
+    with pytest.raises(IdentityUnavailable) as err:
+        await OrchestratorIdentity(client).verify("tok-abc", sid)
+    assert "tok-abc" not in str(err.value)
     await client.aclose()
 
 
@@ -168,6 +221,31 @@ async def test_missing_or_unknown_bearer_is_401(mcp):
     for token in (None, "unknown"):
         r = await rpc(mcp, token, "tools/list")
         assert r.status_code == 401 and r.json()["error"] == "unauthorized"
+
+
+async def test_missing_session_header_is_401_even_for_a_valid_token(mcp, sessions):
+    sessions.tokens["t"] = uuid.uuid4()
+    r = await rpc(mcp, "t", "tools/list", session=NO_HEADER)
+    assert r.status_code == 401 and r.json()["error"] == "unauthorized"
+    assert "X-Orch-Session" in r.json()["detail"]
+
+
+async def test_malformed_session_header_is_401(mcp, sessions):
+    sessions.tokens["t"] = uuid.uuid4()
+    r = await rpc(mcp, "t", "tools/list", session="not-a-uuid")
+    assert r.status_code == 401
+
+
+async def test_token_of_another_session_than_the_header_is_401(mcp, sessions):
+    sessions.tokens["t"] = uuid.uuid4()
+    r = await rpc(mcp, "t", "tools/list", session=uuid.uuid4())
+    assert r.status_code == 401
+
+
+async def test_verified_header_session_is_the_caller(mcp, sessions, translator, conn):
+    token, _, _ = await translator()
+    result = await call(mcp, token, "feedback_add", kind="note", text="n")
+    assert result["isError"] is False
 
 
 async def test_authorization_header_never_reaches_fastmcp(mcp, sessions, monkeypatch):
@@ -343,8 +421,9 @@ async def test_feedback_add_validation(mcp, translator, conn):
 async def test_feedback_cap_per_run(pool, settings, sessions, translator, conn):
     c = McpClient(
         build_mcp_app(
-            pool, settings.model_copy(update={"max_feedback_per_run": 2}), sessions.resolve
-        )
+            pool, settings.model_copy(update={"max_feedback_per_run": 2}), sessions.verify
+        ),
+        sessions,
     )
     token, _, _ = await translator()
     for _ in range(2):

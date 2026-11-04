@@ -23,7 +23,6 @@ def app_settings(settings, url):
             "database_url": SecretStr(url),
             "device_port": free_port(),
             "mcp_port": free_port(),
-            "orchestrator_agent_url": "http://orch-agent.invalid",
             "poll_seconds": 0.1,
             "http_host": "127.0.0.1",
         }
@@ -136,9 +135,3 @@ async def test_serves_translator_tools_on_the_mcp_port(app_settings, orchestrato
     stop.set()
     await asyncio.wait_for(task, 10)
     assert r.status_code == 401 and r.json()["error"] == "unauthorized"
-
-
-async def test_app_without_orchestrator_agent_url_refuses_to_start(app_settings, orchestrator):
-    settings = app_settings.model_copy(update={"orchestrator_agent_url": None})
-    with pytest.raises(ValueError, match="APPCONN_ORCHESTRATOR_AGENT_URL"):
-        await run_app(settings, orchestrator=orchestrator, stop=asyncio.Event())

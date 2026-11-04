@@ -19,7 +19,6 @@ BASE = {
     "postgres": {"url": "postgresql://" + "u:" + DB_PASS + "@db.example.com:5432/a"},
     "orchestrator": {
         "url": "http://orchestrator.example.com",
-        "agentUrl": "http://orchestrator-agent.example.com",
         "token": ORCH_TOKEN,
     },
 }
@@ -121,7 +120,7 @@ def test_commands_ports_and_migrate_init():
     assert cm["data"]["APPCONN_HTTP_PORT"] == "8000"
     assert cm["data"]["APPCONN_DEVICE_PORT"] == "8001"
     assert cm["data"]["APPCONN_ORCHESTRATOR_URL"] == "http://orchestrator.example.com"
-    assert cm["data"]["APPCONN_ORCHESTRATOR_AGENT_URL"] == "http://orchestrator-agent.example.com"
+    assert "APPCONN_ORCHESTRATOR_AGENT_URL" not in cm["data"]
     assert cm["data"]["APPCONN_MCP_PORT"] == "8002"
     assert main(docs, "admin")["ports"] == [
         {"name": "http", "containerPort": 8000, "protocol": "TCP"}
@@ -366,7 +365,6 @@ def test_app_replicas_one_is_accepted():
             "only one of postgres.url and postgres.existingSecret",
         ),
         ({"orchestrator": {"url": ""}}, "orchestrator.url is required"),
-        ({"orchestrator": {"agentUrl": ""}}, "orchestrator.agentUrl is required"),
         ({"orchestrator": {"token": ""}}, "orchestrator token is required"),
         (
             {"orchestrator": {"existingSecret": "x"}},

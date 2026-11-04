@@ -28,7 +28,6 @@ log = logging.getLogger(__name__)
 
 SINGLETON_KEY = "agents-app-connector-app"
 TASKBOARD_TIMEOUT_SECONDS = 10.0
-IDENTITY_TIMEOUT_SECONDS = 10.0
 
 
 async def _loop(name: str, unit, interval: float, stop: asyncio.Event) -> None:
@@ -49,8 +48,6 @@ async def run_app(
     stop: asyncio.Event,
 ) -> None:
     """Serve until `stop` is set. An injected `orchestrator` is not closed here."""
-    if not settings.orchestrator_agent_url:
-        raise ValueError("APPCONN_ORCHESTRATOR_AGENT_URL is required by the app process")
     pool = await open_pool(settings.database_url.get_secret_value())
     owned = orchestrator is None
     if orchestrator is None:
@@ -62,16 +59,13 @@ async def run_app(
         if settings.taskboard_url
         else None
     )
-    identity_client = httpx.AsyncClient(
-        base_url=settings.orchestrator_agent_url, timeout=IDENTITY_TIMEOUT_SECONDS
-    )
     try:
         store = AttachmentStore(settings.data_dir)
         plugins = list(REGISTRY.values())
         app = create_device_app(
             pool, settings, plugins, store, orchestrator=orchestrator, taskboard=taskboard
         )
-        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(identity_client).resolve)
+        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(orchestrator).verify)
         units = {
             "worker": Worker(orchestrator, pool, settings, store),
             "tracker": Tracker(orchestrator, pool, settings),
@@ -103,7 +97,6 @@ async def run_app(
                 stop.set()
                 await asyncio.gather(*tasks, return_exceptions=True)
     finally:
-        await identity_client.aclose()
         if taskboard is not None:
             await taskboard.aclose()
         if owned:

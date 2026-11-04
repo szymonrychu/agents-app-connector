@@ -17,6 +17,7 @@ sys.modules["ensure_preset"] = ensure
 spec.loader.exec_module(ensure)
 
 BASE = "http://orch.test/agent/v1/admin"
+MCP = "http://agents-app-connector-mcp:8002/mcp"
 
 
 def make(handler):
@@ -125,7 +126,7 @@ def test_main_exits_1_without_leaking_token(monkeypatch, capsys):
         return httpx.Response(401, json={"error": "unauthorized"})
 
     transport = httpx.MockTransport(handler)
-    code = ensure.main(["--base-url", BASE], transport=transport)
+    code = ensure.main(["--base-url", BASE, "--mcp-url", MCP], transport=transport)
     out = capsys.readouterr()
     assert code == 1
     assert seen["auth"] == "Bearer s3cret-value"
@@ -135,12 +136,48 @@ def test_main_exits_1_without_leaking_token(monkeypatch, capsys):
 
 def test_main_requires_token(monkeypatch, capsys):
     monkeypatch.delenv("ORCH_AGENT_TOKEN", raising=False)
-    assert ensure.main(["--base-url", BASE]) == 1
+    assert ensure.main(["--base-url", BASE, "--mcp-url", MCP]) == 1
     assert "ORCH_AGENT_TOKEN" in capsys.readouterr().err
 
 
 def test_preset_prompt_contains_annotated_spec_rule():
     text = load_preset()["spec"]["wrapper"]["system_append"]
-    for phrase in ("Annotated spec", "strike-through", "Open questions", "unannotated"):
+    for phrase in ("Annotated spec", "strike-through", "feedback_add", "unannotated"):
         assert phrase in text
     assert ensure.__name__ == "ensure_preset"
+
+
+def test_with_mcp_url_fills_the_placeholder_and_leaves_the_rest():
+    preset = load_preset()
+    filled = ensure.with_mcp_url(preset, MCP)
+    assert filled["spec"]["wrapper"]["mcp_servers"]["appconn"]["url"] == MCP
+    assert preset["spec"]["wrapper"]["mcp_servers"]["appconn"]["url"] == "@mcp_url"
+    assert "@mcp_url" not in json.dumps(filled)
+    assert filled["spec"]["wrapper"]["permissions"] == preset["spec"]["wrapper"]["permissions"]
+
+
+def test_main_sends_the_filled_preset_and_requires_mcp_url(monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_AGENT_TOKEN", "tok")
+    bodies = []
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(404, json={})
+        bodies.append(json.loads(req.content))
+        return httpx.Response(201, json={})
+
+    code = ensure.main(
+        ["--base-url", BASE, "--mcp-url", MCP], transport=httpx.MockTransport(handler)
+    )
+    assert code == 0 and capsys.readouterr().out.strip() == "created"
+    server = bodies[0]["spec"]["wrapper"]["mcp_servers"]["appconn"]
+    assert server["url"] == MCP
+    assert server["headers"] == {"Authorization": "Bearer ${ORCH_AGENT_TOKEN}"}
+    with pytest.raises(SystemExit):
+        ensure.main(["--base-url", BASE])
+
+
+def test_main_rejects_a_non_http_mcp_url(monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_AGENT_TOKEN", "tok")
+    assert ensure.main(["--base-url", BASE, "--mcp-url", "ftp://x"]) == 1
+    assert "mcp-url" in capsys.readouterr().err

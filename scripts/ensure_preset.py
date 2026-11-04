@@ -1,6 +1,10 @@
 """Create or update the sketch-translator preset through the orchestrator admin API.
 
-    python scripts/ensure_preset.py --base-url $ORCH_AGENT_URL/agent/v1/admin
+    python scripts/ensure_preset.py --base-url $ORCH_AGENT_URL/agent/v1/admin \
+        --mcp-url http://agents-app-connector-mcp:8002/mcp
+
+--mcp-url is the in-cluster URL of the connector's `<release>-mcp` Service; the repo is public,
+so preset.json keeps the placeholder `@mcp_url` and this script fills it.
 
 The bearer token is read from the environment variable ORCH_AGENT_TOKEN (never from argv) and
 is never printed. A failure prints the HTTP status and the error code only.
@@ -9,6 +13,7 @@ is never printed. A failure prints the HTTP status and the error code only.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from typing import Literal
@@ -32,6 +37,18 @@ def _check(response: httpx.Response) -> httpx.Response:
     except (ValueError, AttributeError):
         code = "unknown"
     raise EnsureError(f"HTTP {response.status_code} {code}")
+
+
+MCP_PLACEHOLDER = "@mcp_url"
+
+
+def with_mcp_url(preset: dict, mcp_url: str) -> dict:
+    """A copy of the preset with the `@mcp_url` placeholder of its MCP servers filled."""
+    filled = json.loads(json.dumps(preset))
+    for server in (filled["spec"]["wrapper"].get("mcp_servers") or {}).values():
+        if server.get("url") == MCP_PLACEHOLDER:
+            server["url"] = mcp_url
+    return filled
 
 
 def ensure_preset(
@@ -59,7 +76,13 @@ def ensure_preset(
 def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", required=True, help="orchestrator admin API base URL")
+    parser.add_argument(
+        "--mcp-url", required=True, help="in-cluster URL of the connector MCP Service (/mcp)"
+    )
     args = parser.parse_args(argv)
+    if not args.mcp_url.startswith(("http://", "https://")):
+        print("--mcp-url must be an http or https URL", file=sys.stderr)
+        return 1
     token = os.environ.get(TOKEN_ENV)
     if not token:
         print(f"{TOKEN_ENV} is not set", file=sys.stderr)
@@ -67,7 +90,7 @@ def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = 
     headers = {"Authorization": f"Bearer {token}"}
     try:
         with httpx.Client(headers=headers, transport=transport, timeout=30) as client:
-            print(ensure_preset(client, args.base_url, load_preset()))
+            print(ensure_preset(client, args.base_url, with_mcp_url(load_preset(), args.mcp_url)))
     except EnsureError as exc:
         print(str(exc), file=sys.stderr)
         return 1

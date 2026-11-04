@@ -159,8 +159,32 @@ def test_system_append_has_annotated_spec_rule():
     from agents_app_connector.plugins.sketch import load_preset
 
     text = load_preset()["spec"]["wrapper"]["system_append"]
-    assert "Annotated spec" in text and "strike-through" in text and "Open questions" in text
+    assert "Annotated spec" in text and "strike-through" in text and "feedback_add" in text
     text.encode("ascii")
+
+
+def test_system_append_is_a_faithful_transcription_contract():
+    from agents_app_connector.plugins.sketch import load_preset
+
+    text = load_preset()["spec"]["wrapper"]["system_append"]
+    for phrase in (
+        "Agent's job is to recreate",
+        "document_write",
+        "exactly once",
+        "feedback_add",
+        "[illegible]",
+        "[[red]]",
+        "[[/red]]",
+        "never block",
+        "No title",
+        "front matter",
+        "mermaid",
+    ):
+        assert phrase in text, phrase
+    # the old template and its added sections are gone
+    for gone in ("## Transcription", "## Diagrams", "## Requirements", "unreadable_count"):
+        assert gone not in text, gone
+    assert "[[illegible]]" not in text
 
 
 def test_prompts_point_at_the_tools_never_at_the_reply():

@@ -186,7 +186,7 @@ class TranslatorTools:
             "stored": True,
             "version": version,
             "chars": len(markdown),
-            "illegible": markdown.count("[[illegible]]"),
+            "illegible": markdown.count("[illegible]"),
         }
 
     async def add_feedback(

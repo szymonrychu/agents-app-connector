@@ -34,6 +34,7 @@ class Score:
     missing: list[str]
     precision: float = 1.0
     invented: list[str] | None = None
+    added_structure: list[str] | None = None
     kept: float = 1.0
     lost: list[str] | None = None
 
@@ -59,7 +60,7 @@ def _document_words(md: str) -> list[str]:
     reading (`[[?a|b]]` is a, other `[[...]]` markers carry no word), fence lines dropped and
     mermaid blocks reduced to their labels."""
     text = re.sub(r"\[\[\?([^\]|]*)[^\]]*\]\]", r" \1 ", md)
-    text = re.sub(r"\[\[[^\]]*\]\]", " ", text)
+    text = re.sub(r"\[\[[^\]]*\]\]", " ", text).replace("[illegible]", " ")
     kept: list[str] = []
     fence: str | None = None
     for line in text.splitlines():
@@ -82,12 +83,25 @@ def _diagram_ok(md: str, kind: str | None) -> bool:
     return re.search(rf"```mermaid\s*\n\s*{kind}\b", md) is not None
 
 
+def _added_structure(md: str) -> list[str]:
+    """Front matter and markdown headings: the translator must add neither, so each one found
+    is listed (headings outside fences only)."""
+    found = ["front matter"] if md.startswith("---\n") else []
+    fenced = False
+    for line in md.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced and re.match(r"#{1,6}\s", line):
+            found.append(line.strip())
+    return found
+
+
 def score(spec_md: str, expected: dict) -> Score:
     """Word recall, precision (share of the document's words that are drawn on the page),
     diagram kind presence and kept words of one document."""
-    # `[[?a|b]]` counts as both a and b; `[[illegible]]` carries no word.
+    # `[[?a|b]]` counts as both a and b; `[illegible]` carries no word.
     text = re.sub(r"\[\[\?([^\]]*)\]\]", lambda m: m.group(1).replace("|", " "), spec_md)
-    text = text.replace("[[illegible]]", " ")
+    text = text.replace("[illegible]", " ")
     got = _tokens(text)
     words = list(dict.fromkeys(w.lower() for w in expected["words"]))
     missing = [w for w in words if w not in got]
@@ -105,6 +119,7 @@ def score(spec_md: str, expected: dict) -> Score:
         missing=missing,
         precision=precision,
         invented=list(dict.fromkeys(extra)),
+        added_structure=_added_structure(spec_md),
         kept=kept,
         lost=lost,
     )
@@ -229,6 +244,7 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
                 feedback=_feedback_count(client, base, conversation),
                 missing=sc.missing,
                 invented=sc.invented,
+                added_structure=sc.added_structure,
                 kept=round(sc.kept, 3),
                 lost=sc.lost,
             )

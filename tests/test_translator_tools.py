@@ -212,17 +212,17 @@ async def test_no_active_turn_without_a_run(mcp, sessions):
 
 async def test_document_write_stores_next_version_with_run_and_event(mcp, translator, conn, pool):
     token, conv, sketch_id = await translator()
-    result = await call(mcp, token, "document_write", markdown="BOX A\n\n[[illegible]]")
+    result = await call(mcp, token, "document_write", markdown="BOX A\n\n[illegible]")
     assert result["isError"] is False
     assert result["structuredContent"] == {
         "stored": True,
         "version": 1,
-        "chars": 20,
+        "chars": 18,
         "illegible": 1,
     }
     async with pool.connection() as c:
         spec = await specs.get(c, conv, 1)
-    assert spec.markdown == "BOX A\n\n[[illegible]]"
+    assert spec.markdown == "BOX A\n\n[illegible]"
     assert [str(i) for i in spec.sketch_ids] == [sketch_id] and str(spec.inbound_id) == sketch_id
     (run_id,) = only(await rows(conn, "SELECT id FROM runs"))
     assert await rows(conn, "SELECT run_id FROM specs") == [(run_id,)]

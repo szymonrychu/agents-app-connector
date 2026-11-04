@@ -21,7 +21,7 @@ precision, diagram_ok, feedback, seconds`. Recall is case-insensitive word recal
 tokens that are drawn on the page (`words` plus `must_keep`), counted after dropping fence lines,
 mermaid syntax (only node, edge and participant labels count), table and markdown markers, and
 `[[...]]` markers (`[[?a|b]]` counts as a); `min_precision` is 0.9, 0.95 for
-`11-bare-wireframe`. The JSON output also lists the `invented` words. `diagram_ok` checks a
+`11-bare-wireframe`. The JSON output also lists the `invented` words and the `added_structure` (front matter or markdown headings; the document must have none). `[illegible]` markers carry no word. `diagram_ok` checks a
 mermaid block of the expected kind or a GFM table. `feedback` counts the items the translator
 sent with `feedback_add`; they never count against precision because they are not in the
 document.

@@ -165,7 +165,7 @@ def test_score_precision_ignores_markers_and_diagram_syntax():
     exp = {"words": ["start", "valid", "yes", "no", "save", "reject"], "diagram": "flowchart"}
     md = (
         "```mermaid\nflowchart TD\n  A[START] --> B{VALID?}\n  B -->|YES| C[SAVE]\n"
-        '  B -->|NO| D["REJECT"]\n  E[""]\n```\n\n[[?save|sove]] [[illegible]] [[red]] start\n'
+        '  B -->|NO| D["REJECT"]\n  E[""]\n```\n\n[[?save|sove]] [illegible] [[red]]start[[/red]]\n'
     )
     assert ev.score(md, exp).precision == 1.0
     seq = (
@@ -277,3 +277,40 @@ def test_bare_wireframe_item_has_four_labels_and_strict_precision():
     exp = json.loads((ROOT / "eval" / "expected" / f"{BARE}.json").read_text())
     assert exp["words"] == ["login", "email", "password", "sign", "in"]
     assert exp["diagram"] is None and exp["min_precision"] == 0.95
+
+
+def test_score_flags_front_matter_and_added_headings():
+    exp = {"words": ["login", "email", "password", "sign", "in"], "diagram": None}
+    bad = (
+        "---\nid: 1\nconfidence: high\n---\n# Login screen\n\n## Transcription\n\n"
+        "LOGIN\n\n## Requirements\n\n- EMAIL\n"
+    )
+    sc = ev.score(bad, exp)
+    assert sc.added_structure == [
+        "front matter",
+        "# Login screen",
+        "## Transcription",
+        "## Requirements",
+    ]
+    good = ev.score("LOGIN\n\nEMAIL\n\nPASSWORD\n\n[ SIGN IN ]", exp)
+    assert good.added_structure == []
+
+
+def test_bare_wireframe_item_fails_on_invented_sections_and_passes_on_the_bare_text():
+    exp = json.loads((ROOT / "eval" / "expected" / "11-bare-wireframe.json").read_text())
+    invented = ev.score(
+        "# Login\n\n## Transcription\n\nLOGIN\nEMAIL\nPASSWORD\nSIGN IN\n\n"
+        "## Requirements\n\n- The user can sign in\n- The password is hidden\n",
+        exp,
+    )
+    assert invented.precision < exp["min_precision"]
+    assert invented.added_structure
+    bare = ev.score("LOGIN\n\nEMAIL\n\nPASSWORD\n\nSIGN IN\n", exp)
+    assert bare.precision >= exp["min_precision"] and bare.recall == 1.0
+    assert bare.added_structure == []
+
+
+def test_illegible_marker_carries_no_word():
+    exp = {"words": ["buy", "milk"], "diagram": None}
+    sc = ev.score("BUY [illegible] MILK", exp)
+    assert sc.recall == 1.0 and sc.precision == 1.0

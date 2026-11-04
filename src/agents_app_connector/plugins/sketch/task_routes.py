@@ -34,17 +34,18 @@ ID = re.compile(r"\d+")
 WITH_BODY = frozenset({"POST", "PUT", "PATCH"})
 ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
-# (method, route path, path params checked against a pattern); the route path is also the
-# upstream path.
-ROUTES: list[tuple[str, str, dict[str, re.Pattern[str]]]] = [
-    ("GET", "/tasks", {}),
-    ("POST", "/tasks", {}),
-    ("GET", "/tasks/{key}", {"key": KEY}),
-    ("PATCH", "/tasks/{key}", {"key": KEY}),
-    ("POST", "/tasks/{key}/comments", {"key": KEY}),
-    ("PUT", "/tasks/{key}/todo", {"key": KEY}),
-    ("PATCH", "/tasks/{key}/todo/{item_id}", {"key": KEY, "item_id": ID}),
+# (operation id, method, route path, path params checked against a pattern); the route path is
+# also the upstream path.
+ROUTES: list[tuple[str, str, str, dict[str, re.Pattern[str]]]] = [
+    ("tasks_list", "GET", "/tasks", {}),
+    ("tasks_create", "POST", "/tasks", {}),
+    ("tasks_get", "GET", "/tasks/{key}", {"key": KEY}),
+    ("tasks_patch", "PATCH", "/tasks/{key}", {"key": KEY}),
+    ("tasks_comment", "POST", "/tasks/{key}/comments", {"key": KEY}),
+    ("tasks_todo_put", "PUT", "/tasks/{key}/todo", {"key": KEY}),
+    ("tasks_todo_item_patch", "PATCH", "/tasks/{key}/todo/{item_id}", {"key": KEY, "item_id": ID}),
     (
+        "tasks_decision_answer",
         "POST",
         "/tasks/{key}/decisions/{decision_id}/answer",
         {"key": KEY, "decision_id": ID},
@@ -101,16 +102,15 @@ def build_router(deps: PluginDeps) -> APIRouter:
         log.info("task relay %s %s -> %s", method, request.url.path, resp.status_code)
         return JSONResponse(payload, status_code=resp.status_code)
 
-    def add(method: str, path: str, checks: dict[str, re.Pattern[str]]) -> None:
+    def add(op_id: str, method: str, path: str, checks: dict[str, re.Pattern[str]]) -> None:
         async def handler(request: Request, device: Device) -> JSONResponse:
             params = request.path_params
             if not all(p.fullmatch(params[name]) for name, p in checks.items()):
                 raise _not_found()
             return await forward(request, method, path.format(**params))
 
-        name = f"task_relay_{method.lower()}_{path.strip('/').replace('/', '_')}"
-        handler.__name__ = name.replace("{", "").replace("}", "")
-        router.add_api_route(path, handler, methods=[method], name=handler.__name__)
+        handler.__name__ = op_id
+        router.add_api_route(path, handler, methods=[method], operation_id=op_id)
 
     def relay() -> TaskChangeRelay:
         if deps.task_changes is None:
@@ -121,7 +121,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
         return relay()
 
     # declared before `/tasks/{key}` so the literal path wins
-    @router.get("/tasks/stream", response_class=EventSourceResponse)
+    @router.get("/tasks/stream", response_class=EventSourceResponse, operation_id="tasks_stream")
     async def task_changes(
         request: Request, changes: Annotated[TaskChangeRelay, Depends(stream_dependency)]
     ) -> AsyncIterator[ServerSentEvent]:
@@ -138,8 +138,8 @@ def build_router(deps: PluginDeps) -> APIRouter:
                     continue
                 yield ServerSentEvent(data={"key": key}, event="task_changed")
 
-    for method, path, checks in ROUTES:
-        add(method, path, checks)
+    for op_id, method, path, checks in ROUTES:
+        add(op_id, method, path, checks)
 
     @router.api_route("/tasks", methods=ALL_METHODS, include_in_schema=False)
     @router.api_route("/tasks/{rest:path}", methods=ALL_METHODS, include_in_schema=False)

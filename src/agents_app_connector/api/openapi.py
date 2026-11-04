@@ -10,6 +10,7 @@ declared here.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import FastAPI
@@ -48,6 +49,45 @@ ERRORS = {
     502: "the orchestrator answered an error (orchestrator_error)",
     503: "the orchestrator or the database is unavailable (orchestrator_unavailable, unavailable)",
 }
+
+# Task relay routes: upstream taskboard statuses and bodies pass through unchanged, so those
+# statuses may carry either error shape.
+TASK_ERRORS = {
+    401: ERRORS[401],
+    404: (
+        "no such task, todo item or decision (taskboard body), or a path outside the task "
+        "allowlist (not_found)"
+    ),
+    409: "the decision was already answered (already_answered, taskboard body)",
+    412: "the task changed since it was read (stale_version, taskboard body)",
+    413: "request body over 256 KiB (payload_too_large)",
+    422: "invalid request (taskboard body, or invalid_request)",
+    429: ERRORS[429],
+    503: (
+        "the taskboard did not answer in JSON (taskboard_unavailable), no taskboard is "
+        "configured (taskboard_unconfigured), or the database is unavailable (unavailable)"
+    ),
+}
+TASK_PASS_THROUGH = {404, 409, 412, 422}
+TASK_ERROR_REF = {
+    "oneOf": [ERROR_REF, {"$ref": "#/components/schemas/TaskboardError"}],
+}
+TASK_PATH_PARAMS: dict[str, dict[str, Any]] = {
+    "key": {"type": "string", "pattern": "^T-[0-9]+$"},
+    "item_id": INT,
+    "decision_id": INT,
+}
+TASK_QUERY = ("status", "session", "label", "cursor", "limit")
+PASS_THROUGH = {
+    "type": "object",
+    "additionalProperties": True,
+    "description": "the taskboard JSON body, unchanged",
+}
+
+
+def _task_body(description: str) -> dict[str, Any]:
+    return {"type": "object", "additionalProperties": True, "description": description}
+
 
 # (status, description, content type, schema) of the success response; None keeps the generated one.
 OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
@@ -184,9 +224,88 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
             "properties": {"handoff_id": UUID, "session_slug": STR},
         },
     ),
+    ("get", "/tasks"): (
+        "200",
+        "one page of tasks: items, next_cursor (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("post", "/tasks"): (
+        "201",
+        "the new task; 200 on a replayed client_key (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("get", "/tasks/stream"): (
+        "200",
+        "server-sent events: `task_changed` with data {key}, plus keepalive comments",
+        "text/event-stream",
+        {"type": "string"},
+    ),
+    ("get", "/tasks/{key}"): (
+        "200",
+        "the task with decisions, todo, comments and events (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("patch", "/tasks/{key}"): (
+        "200",
+        "the updated task; send the version you read (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("post", "/tasks/{key}/comments"): (
+        "201",
+        "the updated task (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("put", "/tasks/{key}/todo"): (
+        "200",
+        "the updated task (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("patch", "/tasks/{key}/todo/{item_id}"): (
+        "200",
+        "the updated task (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+    ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (
+        "200",
+        "the updated task; the asking session is notified (taskboard body, unchanged)",
+        "application/json",
+        PASS_THROUGH,
+    ),
+}
+
+# Request bodies of the task relay routes: JSON objects the taskboard validates.
+TASK_BODIES = {
+    ("post", "/tasks"): "{kind: task|idea, title (max 200), body?, labels?, client_key}",
+    ("patch", "/tasks/{key}"): "{version, labels?} or {version, body?}",
+    ("post", "/tasks/{key}/comments"): "{body}",
+    ("put", "/tasks/{key}/todo"): "{items: [{text (max 200, one line), status}]}",
+    ("patch", "/tasks/{key}/todo/{item_id}"): "{status: todo|inprogress|done}",
+    ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (
+        "{choice: <option index>} or {text}, optional note"
+    ),
 }
 
 EXTRA_SCHEMAS: dict[str, Any] = {
+    "TaskboardError": {
+        "type": "object",
+        "title": "TaskboardError",
+        "description": "error body of the taskboard, passed through by the task relay",
+        "required": ["error"],
+        "properties": {
+            "error": {
+                "type": "object",
+                "required": ["code", "message"],
+                "properties": {"code": STR, "message": STR},
+            }
+        },
+    },
     "Event": {
         "type": "object",
         "title": "Event",
@@ -247,6 +366,15 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/conversations/{conversation_id}/spec/{version}"): (401, 404, 422, 429),
     ("get", "/attachments/{attachment_id}"): (401, 404, 410, 429),
     ("get", "/handoff/targets"): (401, 429, 502, 503),
+    ("get", "/tasks"): (401, 422, 429, 503),
+    ("post", "/tasks"): (401, 413, 422, 429, 503),
+    ("get", "/tasks/stream"): (401, 429, 503),
+    ("get", "/tasks/{key}"): (401, 404, 429, 503),
+    ("patch", "/tasks/{key}"): (401, 404, 412, 413, 422, 429, 503),
+    ("post", "/tasks/{key}/comments"): (401, 404, 413, 422, 429, 503),
+    ("put", "/tasks/{key}/todo"): (401, 404, 413, 422, 429, 503),
+    ("patch", "/tasks/{key}/todo/{item_id}"): (401, 404, 413, 422, 429, 503),
+    ("post", "/tasks/{key}/decisions/{decision_id}/answer"): (401, 404, 409, 413, 422, 429, 503),
     ("post", "/conversations/{conversation_id}/handoff"): (
         401,
         404,
@@ -276,6 +404,13 @@ SUMMARIES = {
     "/attachments/{attachment_id}": "Download a stored sketch file",
     "/handoff/targets": "Sessions and presets a spec can be handed to",
     "/conversations/{conversation_id}/handoff": "Hand the latest spec to a session",
+    "/tasks": "List or create tasks (relayed to the taskboard)",
+    "/tasks/stream": "Stream task changes over SSE (one shared upstream subscription)",
+    "/tasks/{key}": "Read or edit a task (relayed)",
+    "/tasks/{key}/comments": "Add a comment (relayed)",
+    "/tasks/{key}/todo": "Replace the todo list (relayed)",
+    "/tasks/{key}/todo/{item_id}": "Set a todo item status (relayed)",
+    "/tasks/{key}/decisions/{decision_id}/answer": "Answer a decision (relayed)",
     "/devices": "Pair or list devices",
     "/devices/{device_id}": "Revoke a device",
 }
@@ -299,6 +434,8 @@ def _apps() -> list[FastAPI]:
 def _walk(router, prefix: str = ""):
     for route in router.routes:
         if isinstance(route, APIRoute):
+            if not route.include_in_schema:
+                continue  # the task allowlist catch-alls are not part of the contract
             yield prefix + route.path, route.methods
         elif hasattr(route, "original_router"):
             yield from _walk(route.original_router, prefix + route.include_context.prefix)
@@ -322,6 +459,26 @@ def _local(path: str) -> str:
         if path.startswith(prefix):
             return path.removeprefix(prefix) or "/"
     return path
+
+
+def _task_operation(operation: dict[str, Any], method: str, local: str) -> None:
+    """Path and query parameters and the JSON request body of a task relay route."""
+    params: list[dict[str, Any]] = [
+        {"name": name, "in": "path", "required": True, "schema": TASK_PATH_PARAMS[name]}
+        for name in re.findall(r"{(\w+)}", local)
+    ]
+    if (method, local) == ("get", "/tasks"):
+        for name in TASK_QUERY:
+            schema = {"type": "array", "items": STR} if name == "label" else STR
+            params.append({"name": name, "in": "query", "required": False, "schema": schema})
+    if params:
+        operation["parameters"] = params
+    body = TASK_BODIES.get((method, local))
+    if body is not None:
+        operation["requestBody"] = {
+            "required": True,
+            "content": {"application/json": {"schema": _task_body(body)}},
+        }
 
 
 def build_openapi() -> dict[str, Any]:
@@ -349,12 +506,16 @@ def build_openapi() -> dict[str, Any]:
                         }
                     },
                 }
+            is_task = path.startswith(DEVICE) and local.startswith("/tasks")
+            if is_task:
+                _task_operation(operation, method, local)
             for status in [s for s in responses if not s.startswith("2")]:
                 del responses[status]
             for status in ROUTE_ERRORS.get((method, local), ()):
+                shape = TASK_ERROR_REF if is_task and status in TASK_PASS_THROUGH else ERROR_REF
                 responses[str(status)] = {
-                    "description": ERRORS[status],
-                    "content": {"application/json": {"schema": ERROR_REF}},
+                    "description": (TASK_ERRORS if is_task else ERRORS)[status],
+                    "content": {"application/json": {"schema": shape}},
                 }
             if path.startswith(DEVICE):
                 operation["security"] = [{"deviceToken": []}]

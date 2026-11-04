@@ -105,6 +105,64 @@ Hand the latest spec to a session: body `{client_id, session: "<slug>" | {"prese
 202 `{session_slug}` plus the additive `handoff_id`; progress arrives as `handoff` events.
 404 `unknown_session`, 409 `no_spec`, 422 `preset_not_allowed`.
 
+### Task relay (Tasks tab)
+
+A paired device acts as the user on the agents taskboard through these routes. The connector
+forwards a fixed allowlist of taskboard paths to the taskboard delegate listener
+(`/taskboard/api/v1`) with its own bearer (`APPCONN_TASKBOARD_TOKEN`, never the device token or
+any inbound header; the query string passes through). It stores nothing and logs method, path
+and status only. The upstream status and JSON body come back unchanged, so the taskboard errors
+(404, 409 `already_answered`, 412 `stale_version`, 422) arrive in the taskboard shape
+`{"error": {"code", "message"}}`; the connector's own errors keep `{"error", "detail"}`:
+404 `not_found` for any path or method outside the allowlist, 413 `payload_too_large` for a
+body over 256 KiB, 503 `taskboard_unavailable` (connect error, timeout or a non-JSON answer)
+and 503 `taskboard_unconfigured` (`APPCONN_TASKBOARD_URL` unset). Asking and withdrawing
+decisions are agent-only and are not relayed.
+
+### `GET /app/v1/sketch/tasks`
+
+List tasks. Query (all optional, passed through): `status` (`active` default, `done`,
+`dropped`, `all`), `session`, `label` (repeatable), `cursor`, `limit`. 200 `{items, next_cursor}`.
+
+### `POST /app/v1/sketch/tasks`
+
+Create a task: `{kind, title, body?, labels?, client_key}`. 201, or 200 when `client_key` was
+already used (a retry returns the same task).
+
+### `GET /app/v1/sketch/tasks/stream`
+
+Server-sent events `task_changed` with data `{"key": "T-5"}`, plus a keepalive comment every
+15 s. All device streams share one upstream subscription that is opened with the first stream,
+reconnects with backoff and closes with the last. A key is only a refresh hint. The stream ends
+within one keepalive interval when the device token is revoked.
+
+### `GET /app/v1/sketch/tasks/{key}`
+
+One task with decisions, todo, comments and events. 404 for an unknown task.
+
+### `PATCH /app/v1/sketch/tasks/{key}`
+
+Edit a task: `{version, labels}` or `{version, body}`. 412 `stale_version` when the task changed
+since it was read.
+
+### `POST /app/v1/sketch/tasks/{key}/comments`
+
+Add a comment: `{body}`. 201 with the updated task.
+
+### `PUT /app/v1/sketch/tasks/{key}/todo`
+
+Replace the todo list: `{items: [{text, status}]}` (text up to 200 characters on one line;
+status `todo`, `inprogress` or `done`).
+
+### `PATCH /app/v1/sketch/tasks/{key}/todo/{item_id}`
+
+Set one item's status: `{status}`.
+
+### `POST /app/v1/sketch/tasks/{key}/decisions/{decision_id}/answer`
+
+Answer a decision with `{choice}` (option index) or `{text}`, plus an optional `note`. The
+asking session is notified by the taskboard. A second answer is 409 `already_answered`.
+
 Admin API v1 (prefix `/app/admin/v1`, behind SSO and a source CIDR allowlist; errors from the
 allowlist are `{"error": "forbidden"}`).
 
@@ -156,6 +214,8 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_ADMIN_ALLOWED_CIDRS` | `127.0.0.1/32` | comma-separated source CIDRs of the admin API |
 | `APPCONN_HANDOFF_PRESETS` | empty | comma-separated presets a spec may be handed to |
 | `APPCONN_MAX_TEXT_CHARS` | 8000 | follow-up message length cap |
+| `APPCONN_TASKBOARD_URL` | unset | base URL of the taskboard delegate listener; set together with the token or not at all |
+| `APPCONN_TASKBOARD_TOKEN` | unset | delegate bearer for the task relay (not the orchestrator relay token) |
 
 ## Subcommands
 

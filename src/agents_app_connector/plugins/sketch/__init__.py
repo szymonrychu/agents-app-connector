@@ -32,6 +32,13 @@ def _name(kind: str, attachment_id) -> str:
     return f"strokes-{attachment_id}.json"
 
 
+def _image_detail(annotated, note, page: int) -> str:
+    if annotated is None or note is None:
+        return f"page {page}"
+    first, last = note.lines
+    return f"spec v{annotated[0]}, document page {note.doc_page}, source lines {first}-{last}"
+
+
 _KEY_LINE = re.compile(r"^[A-Za-z_][\w-]*\s*:")
 
 
@@ -77,23 +84,37 @@ class SketchPlugin:
 
     def render_prompt(self, turn: "TurnInput") -> str:
         parts: list[str] = []
+        annotated = turn.annotated_spec
         if turn.kind == "sketch" or any(f.kind == "sketch_png" for f in turn.files):
             pngs = [f for f in turn.files if f.kind == "sketch_png"]
             if not pngs:
                 parts.append(MISSING_FILE)
             else:
+                notes = {p.page: p for p in turn.annotated_pages}
                 lines = [
-                    f"Image {i}: {_name('sketch_png', f.attachment_id)} (page {f.page or 0})"
+                    f"Image {i}: {_name('sketch_png', f.attachment_id)} "
+                    f"({_image_detail(annotated, notes.get(f.page or 0), f.page or 0)})"
                     for i, f in enumerate(pngs, 1)
                 ]
                 parts.append("\n".join(lines))
-                if len(pngs) > 1:
+                if len(pngs) > 1 and annotated is None:
                     parts.append("The images are pages of one sketch; treat them together.")
+        if annotated is not None:
+            n = annotated[0]
+            parts.append(
+                f"These images are spec version {n} rendered as pages with the user's "
+                "handwritten notes over them. Printed text is the spec; handwriting, marks and "
+                f"shapes are the notes. Apply the notes to spec version {n} and return the full "
+                "revised spec."
+            )
         if turn.caption:
             parts.append(f"Caption: {turn.caption}")
         if turn.text:
             parts.append(f"User feedback: {turn.text}")
-        if turn.previous_spec is not None:
+        if annotated is not None:
+            version, markdown = annotated
+            parts.append(f"Spec version {version}:\n```markdown\n{markdown.strip()}\n```")
+        elif turn.previous_spec is not None:
             version, markdown = turn.previous_spec
             parts.append(f"Previous spec version {version}:\n```markdown\n{markdown.strip()}\n```")
         parts.append(FINAL_LINE)

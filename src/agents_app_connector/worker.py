@@ -54,7 +54,7 @@ from agents_app_connector.db import (
 )
 from agents_app_connector.db.inbound import InboundRow
 from agents_app_connector.handoff import Handoffs
-from agents_app_connector.plugins import REGISTRY, TurnFile, TurnInput
+from agents_app_connector.plugins import REGISTRY, AnnotatedPage, TurnFile, TurnInput
 from agents_app_connector.plugins.sketch import MISSING_FILE
 from agents_app_connector.run_store import AppRunStore, status_event
 from agents_app_connector.settings import Settings
@@ -305,6 +305,7 @@ class Worker:
                 missing = True
                 continue
             files.append(TurnFile(att.id, att.kind, att.path, att.mime, data, att.page))
+        annotated_spec, annotated_pages = await self._annotation(row)
         plugin = REGISTRY[conv.plugin]
         turn = TurnInput(
             kind=row.kind,  # type: ignore[arg-type]
@@ -315,11 +316,30 @@ class Worker:
             text=row.text if row.kind == "message" else None,
             files=files,
             previous_spec=previous,
+            annotated_spec=annotated_spec,
+            annotated_pages=annotated_pages,
         )
         text = plugin.render_prompt(turn)
         if missing and MISSING_FILE not in text:
             text = f"{MISSING_FILE}\n\n{text}"
         return text, plugin.turn_attachments(turn)
+
+    async def _annotation(self, row: InboundRow) -> tuple[tuple[int, str] | None, list]:
+        """Spec vN and the page map of an annotation sketch, on every turn (first or follow):
+        the session may have been reclaimed or hold later versions. A vanished spec gives the
+        plain prompt."""
+        raw = row.meta.get("annotates") if row.kind == "sketch" else None
+        if raw is None:
+            return None, []
+        async with self._pool.connection() as conn:
+            spec = await specs.get(conn, row.conversation_id, raw["spec_version"])
+        if spec is None:
+            return None, []
+        pages = [
+            AnnotatedPage(p["page"], p["doc_page"], (p["lines"][0], p["lines"][1]))
+            for p in raw["pages"]
+        ]
+        return (spec.version, spec.markdown), pages
 
     def _read(self, path: str) -> bytes | None:
         try:

@@ -356,3 +356,94 @@ async def test_missing_one_page_file_marks_missing(worker, fake, device_api, tok
     msg = only(fake.messages.values())
     assert "(sketch file no longer stored)" in msg["text"]
     assert "(page 0)" in msg["text"] and "(page 1)" not in msg["text"]
+
+
+async def _spec(conn, conv, version, markdown):
+    await conn.execute(
+        "INSERT INTO specs (conversation_id, version, markdown) VALUES (%s, %s, %s)",
+        (conv, version, markdown),
+    )
+
+
+def _annotates(version, *page_ids):
+    return {
+        "spec_version": version,
+        "pages": [{"page": p, "doc_page": p + 1, "lines": [p * 10, p * 10 + 5]} for p in page_ids],
+    }
+
+
+async def _annotation_upload(device_api, token, conv, version, page_ids=(0,)):
+    m = meta(
+        conversation_id=conv,
+        pages=pages(*page_ids),
+        annotates=_annotates(version, *page_ids),
+        caption=f"Handwritten notes over spec v{version}",
+    )
+    r = await post(device_api, token, m, files(with_strokes=True, count=len(page_ids)))
+    assert r.status_code == 202, r.text
+    return r.json()["sketch_id"]
+
+
+async def test_annotation_first_run_renders_spec_vn(worker, fake, upload, device_api, token, conn):
+    _, conv = await upload()
+    await _spec(conn, conv, 1, "# Spec one")
+    await _spec(conn, conv, 2, "# Spec two")
+    await conn.execute("UPDATE inbound SET status = 'handled'")
+    await _annotation_upload(device_api, token, conv, 1)
+    await worker.tick()
+    msg = only(fake.messages.values())
+    assert "Spec version 1:\n```markdown\n# Spec one\n```" in msg["text"]
+    assert "Previous spec version" not in msg["text"] and "# Spec two" not in msg["text"]
+    assert "(spec v1, document page 1, source lines 0-5)" in msg["text"]
+    assert "Apply the notes to spec version 1" in msg["text"]
+
+
+async def test_annotation_follow_run_renders_spec_vn(
+    worker, fake, upload, device_api, token, pool, conn
+):
+    _, conv = await upload()
+    await worker.tick()
+    await _spec(conn, conv, 1, "# Spec one")
+    await _spec(conn, conv, 2, "# Spec two")
+    await finish_all(pool)
+    await _annotation_upload(device_api, token, conv, 1, page_ids=(0, 1))
+    await worker.tick()
+    assert len(fake.sessions) == 1 and len(fake.messages) == 2
+    follow = list(fake.messages.values())[1]
+    assert "Spec version 1:\n```markdown\n# Spec one\n```" in follow["text"]
+    assert "# Spec two" not in follow["text"]
+    assert "document page 1, source lines 0-5" in follow["text"]
+    assert "document page 2, source lines 10-15" in follow["text"]
+    assert len(fake.attachments[follow["id"]]) == 4
+
+
+async def test_annotation_with_purged_spec_file_still_lists_missing_marker(
+    worker, fake, upload, device_api, token, conn
+):
+    _, conv = await upload()
+    await _spec(conn, conv, 1, "# Spec one")
+    await conn.execute("UPDATE inbound SET status = 'handled'")
+    await _annotation_upload(device_api, token, conv, 1, page_ids=(0, 1))
+    await conn.execute(
+        "UPDATE attachments SET purged_at = now() "
+        "WHERE kind = 'sketch_png' AND page = 1 AND inbound_id IN "
+        "(SELECT id FROM inbound WHERE kind = 'sketch' ORDER BY created_at DESC LIMIT 1)"
+    )
+    await worker.tick()
+    msg = only(fake.messages.values())
+    assert "(sketch file no longer stored)" in msg["text"]
+    assert "document page 1" in msg["text"] and "document page 2" not in msg["text"]
+    assert "Spec version 1:" in msg["text"]
+
+
+async def test_annotation_with_vanished_spec_falls_back_to_plain_prompt(
+    worker, fake, upload, device_api, token, conn
+):
+    _, conv = await upload()
+    await _spec(conn, conv, 1, "# Spec one")
+    await conn.execute("UPDATE inbound SET status = 'handled'")
+    await _annotation_upload(device_api, token, conv, 1)
+    await conn.execute("DELETE FROM specs")
+    await worker.tick()
+    msg = only(fake.messages.values())
+    assert "Spec version" not in msg["text"] and "(page 0)" in msg["text"]

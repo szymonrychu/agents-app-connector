@@ -177,7 +177,7 @@ class TranslatorTools:
                 raise ToolError(f"{NO_ACTIVE_TURN}: no turn of yours is running")
             sketch_ids = await inbound.sketch_ids_upto(conn, row)
             version = await specs.add(
-                conn, run.conversation_id, markdown, row.id, sketch_ids, False, run_id=run.id
+                conn, run.conversation_id, markdown, row.id, sketch_ids, run.id
             )
             await events.append(conn, run.conversation_id, "spec", {"version": version})
             await conversations.touch(conn, run.conversation_id)

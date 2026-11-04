@@ -28,11 +28,11 @@ class SpecRow:
     markdown: str
     inbound_id: uuid.UUID | None
     sketch_ids: list[uuid.UUID]
-    front_matter: bool
+    run_id: int | None
     created_at: datetime
 
 
-_COLUMNS = "conversation_id, version, markdown, inbound_id, sketch_ids, front_matter, created_at"
+_COLUMNS = "conversation_id, version, markdown, inbound_id, sketch_ids, run_id, created_at"
 
 
 async def add(
@@ -41,26 +41,22 @@ async def add(
     markdown: str,
     inbound_id: uuid.UUID | None,
     sketch_ids: Sequence[uuid.UUID],
-    front_matter: bool,
-    *,
-    run_id: int | None = None,
+    run_id: int | None,
 ) -> int:
     """Store the next version (1 for the first) and return it. One run per conversation is in
     progress at a time; the primary key rejects a racing second writer."""
     cur = await conn.execute(
-        "INSERT INTO specs (conversation_id, version, markdown, inbound_id, sketch_ids, "
-        "front_matter, run_id) SELECT %s, coalesce(max(version), 0) + 1, %s, %s, %s, %s, %s "
+        "INSERT INTO specs (conversation_id, version, markdown, inbound_id, sketch_ids, run_id) "
+        "SELECT %s, coalesce(max(version), 0) + 1, %s, %s, %s, %s "
         "FROM specs WHERE conversation_id = %s RETURNING version",
-        (
-            conversation_id,
-            markdown,
-            inbound_id,
-            list(sketch_ids),
-            front_matter,
-            run_id,
-            conversation_id,
-        ),
+        (conversation_id, markdown, inbound_id, list(sketch_ids), run_id, conversation_id),
     )
+    return (await cur.fetchone())[0]
+
+
+async def last_of_run(conn: psycopg.AsyncConnection, run_id: int) -> int | None:
+    """The newest version the run wrote, None when it wrote none."""
+    cur = await conn.execute("SELECT max(version) FROM specs WHERE run_id = %s", (run_id,))
     return (await cur.fetchone())[0]
 
 

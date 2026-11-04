@@ -109,8 +109,8 @@ async def test_constraints_and_cascade(conn):
         (uuid.uuid4(), iid, cid, did, SHA),
     )
     await conn.execute(
-        "INSERT INTO specs (conversation_id, version, markdown, inbound_id, sketch_ids, "
-        "front_matter) VALUES (%s, 1, '# t', %s, %s, true)",
+        "INSERT INTO specs (conversation_id, version, markdown, inbound_id, sketch_ids) "
+        "VALUES (%s, 1, '# t', %s, %s)",
         (cid, iid, [iid]),
     )
     await conn.execute(
@@ -148,3 +148,10 @@ async def test_feedback_and_specs_run_id_cascade(conn):
     for t in ("specs", "feedback"):
         cur = await conn.execute(f"SELECT count(*) FROM {t}")  # noqa: S608
         assert (await cur.fetchone())[0] == 0
+
+
+async def test_specs_have_no_front_matter_column(conn):
+    cur = await conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'specs'"
+    )
+    assert "front_matter" not in {r[0] for r in await cur.fetchall()}

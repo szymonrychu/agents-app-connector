@@ -5,6 +5,11 @@ from test_plugins import make_turn
 from agents_app_connector.plugins import TurnFile
 from agents_app_connector.plugins.sketch import PLUGIN
 
+FINAL = (
+    "Write the document with document_write and anything else with feedback_add. "
+    "Your reply text is discarded."
+)
+
 
 def test_prompt_image_before_caption_and_instruction():
     t = make_turn()
@@ -12,10 +17,10 @@ def test_prompt_image_before_caption_and_instruction():
     aid = t.files[0].attachment_id
     img = p.index(f"sketch-{aid}.png")
     assert img < p.index("login screen")
-    assert img < p.index("Reply with only the markdown spec.")
+    assert img < p.index(FINAL)
     assert f"Image 1: sketch-{aid}.png (page 0)" in p
     assert "<this message>" not in p
-    assert p.rstrip().endswith("Reply with only the markdown spec.")
+    assert p.rstrip().endswith(FINAL)
 
 
 def test_prompt_follow_includes_previous_spec_and_feedback():
@@ -31,7 +36,7 @@ def test_prompt_follow_includes_previous_spec_and_feedback():
     assert "Previous spec version 2:" in p
     assert "```markdown\n# Old\n```" in p
     assert "rename the button" in p
-    assert p.rstrip().endswith("Reply with only the markdown spec.")
+    assert p.rstrip().endswith(FINAL)
     assert "Image 1" not in p
 
 
@@ -116,10 +121,10 @@ def test_annotation_prompt_snapshot():
         f"Image 2: sketch-{ids[1]}.png (spec v2, document page 4, source lines 10-15)\n\n"
         "These images are spec version 2 rendered as pages with the user's handwritten notes "
         "over them. Printed text is the spec; handwriting, marks and shapes are the notes. "
-        "Apply the notes to spec version 2 and return the full revised spec.\n\n"
+        "Apply the notes to spec version 2 and call document_write with the full revised "
+        "document.\n\n"
         "Caption: Handwritten notes over spec v2\n\n"
-        "Spec version 2:\n```markdown\n# Login\n\nBody text\n```\n\n"
-        "Reply with only the markdown spec."
+        "Spec version 2:\n```markdown\n# Login\n\nBody text\n```\n\n" + FINAL
     )
 
 
@@ -144,11 +149,10 @@ def test_plain_prompts_unchanged_by_annotation_support():
     t = make_turn()
     aid = t.files[0].attachment_id
     assert PLUGIN.render_prompt(t) == (
-        f"Image 1: sketch-{aid}.png (page 0)\n\nCaption: login screen\n\n"
-        "Reply with only the markdown spec."
+        f"Image 1: sketch-{aid}.png (page 0)\n\nCaption: login screen\n\n" + FINAL
     )
     m = make_turn(kind="message", first=False, files=[], caption=None, text="x")
-    assert PLUGIN.render_prompt(m) == "User feedback: x\n\nReply with only the markdown spec."
+    assert PLUGIN.render_prompt(m) == "User feedback: x\n\n" + FINAL
 
 
 def test_system_append_has_annotated_spec_rule():
@@ -157,3 +161,11 @@ def test_system_append_has_annotated_spec_rule():
     text = load_preset()["spec"]["wrapper"]["system_append"]
     assert "Annotated spec" in text and "strike-through" in text and "Open questions" in text
     text.encode("ascii")
+
+
+def test_prompts_point_at_the_tools_never_at_the_reply():
+    for turn in (make_turn(), make_turn(kind="message", first=False, files=[], text="x")):
+        p = PLUGIN.render_prompt(turn)
+        assert "document_write" in p and "feedback_add" in p
+        assert "Reply with" not in p and "markdown spec" not in p
+        assert p.isascii()

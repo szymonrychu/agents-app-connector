@@ -1,15 +1,18 @@
-"""The reply tracker: finished translator turns into stored spec versions.
+"""The reply tracker: settles finished translator turns.
 
-Each tick polls the message of every in-progress `first` or `follow` run once. A completed turn
-is closed in the connector's own transaction: the run, the spec version, the inbound row and the
-`spec` and status events together, so a crash leaves the run in progress and the next tick
-stores the spec once. Every other outcome (failed turn, failed or cancelled message, message not
-found, timeout) goes to agents_common's `track` with the shared run store, whose finish settles
-the row and emits the `failed` event; a follow run whose session is gone is requeued there. An
-empty reply fails the run `empty_reply`. A run of a deleted conversation fails
-`conversation_deleted` with no spec and no events. An unavailable orchestrator leaves the run in
-progress for the next tick. A handoff run finishes when its message was sent
-(`track_delivery`); a cancelled, failed or missing message fails it `session_gone`.
+The translator writes the document and its feedback during the turn with its MCP tools
+(`translator_tools`); the reply text is never stored. Each tick polls the message of every
+in-progress `first` or `follow` run once. A completed turn that wrote a version or feedback is
+closed in the connector's own transaction: the run, the inbound row, the run's feedback linked
+to the last version it wrote, and the `done` status event (with that version, if any), so a
+crash leaves the run in progress and the next tick settles it once. A completed turn that wrote
+neither fails `no_document`. Every other outcome (failed turn, failed or cancelled message,
+message not found, timeout) goes to agents_common's `track` with the shared run store, whose
+finish settles the row and emits the `failed` event; a follow run whose session is gone is
+requeued there. A run of a deleted conversation fails `conversation_deleted` with no events. An
+unavailable orchestrator leaves the run in progress for the next tick. A handoff run finishes
+when its message was sent (`track_delivery`); a cancelled, failed or missing message fails it
+`session_gone`.
 """
 
 import logging
@@ -27,15 +30,14 @@ from agents_common.orchestrator import (
 from psycopg_pool import AsyncConnectionPool
 
 from agents_app_connector.clock import utcnow
-from agents_app_connector.db import bindings, conversations, events, inbound, runs, specs
-from agents_app_connector.plugins import REGISTRY
+from agents_app_connector.db import bindings, conversations, events, feedback, inbound, runs, specs
 from agents_app_connector.run_store import AppRunStore, status_event
 from agents_app_connector.settings import Settings
 
 log = logging.getLogger(__name__)
 
 TRACKED = ("first", "follow")
-EMPTY_REPLY = "empty_reply"
+NO_DOCUMENT = "no_document"
 CONVERSATION_DELETED = "conversation_deleted"
 INBOUND_MISSING = "inbound_missing"
 TIMEOUT = "timeout"
@@ -107,10 +109,12 @@ class Tracker:
         message = await self._fetch(run)
         turn = None if message is None else message.turn
         if turn is not None and turn.status == "completed":
-            if (turn.final_text or "").strip():
-                await self._store_spec(run, conv.plugin, turn.final_text or "")
-            else:
-                await self._runs.finish(run.id, "failed", EMPTY_REPLY)
+            # Length only: the reply may carry user content and is never stored.
+            log.info(
+                "run %s: turn completed, reply of %d chars", run.id, len(turn.final_text or "")
+            )
+            if not await self._settle(run):
+                await self._runs.finish(run.id, "failed", NO_DOCUMENT)
             return
         await agent_runs.track(
             _Fetched(message),  # type: ignore[arg-type]
@@ -136,8 +140,9 @@ class Tracker:
                 await self._runs.finish(run.id, "failed", TIMEOUT)
             raise OrchestratorUnavailable(f"poll refused: {exc.status}") from exc
 
-    async def _store_spec(self, run: runs.RunRow, plugin_id: str, final_text: str) -> None:
-        markdown, has_front = REGISTRY[plugin_id].outbound(final_text)
+    async def _settle(self, run: runs.RunRow) -> bool:
+        """Close a completed turn that wrote a version or feedback; False when it wrote neither
+        (the run stays in progress for the caller to fail)."""
         async with self._pool.connection() as conn, conn.transaction():
             row = await inbound.by_run(conn, run.id)
             conv = await conversations.get(conn, run.conversation_id)
@@ -146,21 +151,22 @@ class Tracker:
                     await runs.finish(conn, run.id, "failed", INBOUND_MISSING)
                 else:
                     await self._close(conn, run, CONVERSATION_DELETED)
-                return
+                return True
+            version = await specs.last_of_run(conn, run.id)
+            if version is None and await feedback.count_for_run(conn, run.id) == 0:
+                return False
             if not await runs.finish(conn, run.id, "handled"):
-                return
-            sketch_ids = await inbound.sketch_ids_upto(conn, row)
-            version = await specs.add(
-                conn, run.conversation_id, markdown, row.id, sketch_ids, has_front
-            )
+                return True
             await inbound.finish(conn, run.id, "handled", None)
-            await events.append(
-                conn, run.conversation_id, "spec", {"version": version, "front_matter": has_front}
-            )
-            type_, payload = status_event(row, "done", version=version)
+            extra = {}
+            if version is not None:
+                await feedback.set_spec_version(conn, run.id, version)
+                extra["version"] = version
+            type_, payload = status_event(row, "done", **extra)
             await events.append(conn, run.conversation_id, type_, payload)
             await conversations.touch(conn, run.conversation_id)
-        log.info("run %s stored spec v%s of %s", run.id, version, run.conversation_id)
+        log.info("run %s done (version %s) for %s", run.id, version, run.conversation_id)
+        return True
 
     async def _fail_deleted(self, run: runs.RunRow) -> None:
         async with self._pool.connection() as conn, conn.transaction():

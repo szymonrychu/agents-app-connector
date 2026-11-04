@@ -43,22 +43,9 @@ def test_attachments_are_agents_common_attachments():
     assert all(isinstance(a, Attachment) for a in out)
 
 
-def test_outbound_strips_fence_and_prose():
-    text = "Here it is\n```markdown\n---\nid: x\n---\n# T\n```"
-    assert PLUGIN.outbound(text) == ("---\nid: x\n---\n# T", True)
-
-
-def test_outbound_plain_fence_and_no_close():
-    assert PLUGIN.outbound("```\n---\nid: x\n# T\n```") == ("---\nid: x\n# T", False)
-
-
-def test_outbound_without_front_matter():
-    assert PLUGIN.outbound("# T") == ("# T", False)
-
-
-def test_outbound_keeps_inner_fences():
-    text = "---\nid: x\n---\n# T\n```text\nbox\n```"
-    assert PLUGIN.outbound(text) == (text, True)
+def test_plugin_has_no_reply_parser():
+    assert not hasattr(PLUGIN, "outbound")
+    assert "outbound" not in plugins.ClientPlugin.__dict__
 
 
 def test_preset_model_and_prompt():

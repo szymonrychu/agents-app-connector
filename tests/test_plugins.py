@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -6,6 +7,7 @@ from agents_common.orchestrator import Attachment
 from agents_app_connector import plugins
 from agents_app_connector.plugins import PLUGIN_IDS, REGISTRY, TurnFile, TurnInput
 from agents_app_connector.plugins.sketch import PLUGIN, SketchPlugin, load_preset
+from agents_app_connector.translator_tools import build_server
 
 
 def make_turn(**kw):
@@ -56,7 +58,6 @@ def test_preset_model_and_prompt():
     assert len(text) <= 16384
     assert "[[?word]]" in text and "mermaid" in text
     assert preset["superleader_manageable"] is True
-    assert "allow" not in spec["wrapper"]["permissions"]
     assert "discard_after_idle_seconds" not in spec
     assert spec["inactivity"] == {"close_seconds": 900}
     assert "crop" not in text.lower()
@@ -84,7 +85,6 @@ def test_text_is_ascii():
 
 def test_preset_is_read_only_without_network():
     perms = load_preset()["spec"]["wrapper"]["permissions"]
-    assert "allow" not in perms
     for tool in (
         "Bash",
         "Write",
@@ -113,3 +113,12 @@ def test_preset_points_the_translator_at_the_connector_mcp_server():
         "url": "@mcp_url",
         "headers": {"Authorization": "Bearer ${ORCH_AGENT_TOKEN}"},
     }
+
+
+def test_preset_allows_exactly_the_translator_tools_of_the_appconn_server():
+    wrapper = load_preset()["spec"]["wrapper"]
+    (key,) = wrapper["mcp_servers"]
+    registered = asyncio.run(build_server(None).list_tools())
+    expected = sorted(f"mcp__{key}__{tool.name}" for tool in registered)
+    assert len(expected) == 2
+    assert sorted(wrapper["permissions"]["allow"]) == expected

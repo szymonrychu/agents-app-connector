@@ -27,6 +27,10 @@
           "mcp__ccw__*",
           "mcp__plugin_*",
           "mcp__claude_ai_*"
+        ],
+        "allow": [
+          "mcp__appconn__document_write",
+          "mcp__appconn__feedback_add"
         ]
       },
       "mcp_servers": {

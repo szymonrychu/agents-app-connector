@@ -5,24 +5,30 @@ to the taskboard delegate listener with the connector's own bearer. Nothing is s
 carries method, path and status only. Upstream status and JSON body come back unchanged.
 """
 
+import asyncio
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 
-from agents_app_connector.api.auth import device_auth
+from agents_app_connector.api.auth import active_device, device_auth
 from agents_app_connector.api.errors import ApiError
 from agents_app_connector.db.devices import DeviceRow
 from agents_app_connector.plugins import PluginDeps
+from agents_app_connector.taskboard_stream import TaskChangeRelay
 
 log = logging.getLogger(__name__)
 
 PLUGIN_ID = "sketch"
 UPSTREAM_PREFIX = "/taskboard/api/v1"
 BODY_CAP_BYTES = 256 * 1024
+# A revoked device token is noticed at the next tick, so this bounds how long a stream outlives it.
+KEEPALIVE_SECONDS = 15.0
 KEY = re.compile(r"T-\d+")
 ID = re.compile(r"\d+")
 WITH_BODY = frozenset({"POST", "PUT", "PATCH"})
@@ -105,6 +111,32 @@ def build_router(deps: PluginDeps) -> APIRouter:
         name = f"task_relay_{method.lower()}_{path.strip('/').replace('/', '_')}"
         handler.__name__ = name.replace("{", "").replace("}", "")
         router.add_api_route(path, handler, methods=[method], name=handler.__name__)
+
+    def relay() -> TaskChangeRelay:
+        if deps.task_changes is None:
+            raise ApiError(503, "taskboard_unconfigured", "no taskboard is configured")
+        return deps.task_changes
+
+    async def stream_dependency(device: Device) -> TaskChangeRelay:
+        return relay()
+
+    # declared before `/tasks/{key}` so the literal path wins
+    @router.get("/tasks/stream", response_class=EventSourceResponse)
+    async def task_changes(
+        request: Request, changes: Annotated[TaskChangeRelay, Depends(stream_dependency)]
+    ) -> AsyncIterator[ServerSentEvent]:
+        async with changes.subscribe() as queue:
+            while True:
+                try:
+                    await active_device(request, PLUGIN_ID)
+                except ApiError:
+                    return  # revoked: the client sees 401 on reconnect
+                try:
+                    key = await asyncio.wait_for(queue.get(), KEEPALIVE_SECONDS)
+                except TimeoutError:
+                    yield ServerSentEvent(comment="keepalive")
+                    continue
+                yield ServerSentEvent(data={"key": key}, event="task_changed")
 
     for method, path, checks in ROUTES:
         add(method, path, checks)

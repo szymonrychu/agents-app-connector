@@ -13,6 +13,7 @@ from agents_app_connector.api.events import EventHub
 from agents_app_connector.api.limits import BodyCap, RateLimiter
 from agents_app_connector.plugins import ClientPlugin, PluginDeps
 from agents_app_connector.settings import Settings
+from agents_app_connector.taskboard_stream import TaskChangeRelay
 
 
 def create_device_app(
@@ -26,12 +27,22 @@ def create_device_app(
     limiter = RateLimiter(settings.rate_per_minute)
     hub = EventHub(settings.database_url.get_secret_value(), pool, settings.poll_seconds)
 
+    task_changes = (
+        TaskChangeRelay(taskboard, token=settings.taskboard_token.get_secret_value())
+        if taskboard is not None and settings.taskboard_token is not None
+        else None
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await hub.start()
+        if task_changes is not None:
+            await task_changes.start()
         try:
             yield
         finally:
+            if task_changes is not None:
+                await task_changes.stop()
             await hub.stop()
 
     app = FastAPI(
@@ -51,6 +62,7 @@ def create_device_app(
         hub=hub,
         orchestrator=orchestrator,
         taskboard=taskboard,
+        task_changes=task_changes,
     )
     for plugin in plugins:
         app.include_router(plugin.router(deps), prefix=plugin.prefix)

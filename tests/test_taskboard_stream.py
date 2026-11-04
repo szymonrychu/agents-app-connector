@@ -4,51 +4,11 @@ import asyncio
 
 import httpx
 import pytest
+from helpers import FakeSse, event
 
 from agents_app_connector.taskboard_stream import TaskChangeRelay
 
 STREAM_PATH = "/taskboard/api/v1/stream"
-
-
-def event(key: str) -> bytes:
-    return f'event: task_changed\ndata: {{"key": "{key}"}}\n\n'.encode()
-
-
-class FakeSse:
-    """Each upstream connection reads chunks from its own queue; None ends it."""
-
-    def __init__(self):
-        self.connections: list[asyncio.Queue] = []
-        self.closed: list[asyncio.Event] = []
-        self.requests: list[httpx.Request] = []
-        self.fail_connects = 0
-        self.connected = asyncio.Event()
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        if self.fail_connects:
-            self.fail_connects -= 1
-            raise httpx.ConnectError("refused")
-        chunks: asyncio.Queue = asyncio.Queue()
-        closed = asyncio.Event()
-        self.connections.append(chunks)
-        self.closed.append(closed)
-        self.connected.set()
-
-        async def body():
-            try:
-                while True:
-                    chunk = await chunks.get()
-                    if chunk is None:
-                        return
-                    yield chunk
-            finally:
-                closed.set()
-
-        return httpx.Response(200, content=body(), headers={"content-type": "text/event-stream"})
-
-    def send(self, chunk: bytes, conn: int = -1) -> None:
-        self.connections[conn].put_nowait(chunk)
 
 
 @pytest.fixture

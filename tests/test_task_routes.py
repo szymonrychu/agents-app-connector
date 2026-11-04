@@ -1,15 +1,18 @@
 """Task relay routes of the sketch plugin, against a fake taskboard over httpx.MockTransport."""
 
+import asyncio
+import contextlib
 import json
 import logging
 
 import httpx
 import pytest
-from helpers import PREFIX, Sketch, bearer
+from helpers import PREFIX, FakeSse, Sketch, bearer, event
 from pydantic import SecretStr
 
 from agents_app_connector.api.device import create_device_app
 from agents_app_connector.db import devices
+from agents_app_connector.plugins.sketch import task_routes
 
 DELEGATE = "delegate-test-token"
 UP = "/taskboard/api/v1"
@@ -247,3 +250,148 @@ async def test_logs_method_path_status_only(api, token, board, caplog):
     assert "POST" in text and "/tasks/T-1/comments" in text and "200" in text
     for leak in ("bodytext-marker", "qqq", "zzz", token, DELEGATE):
         assert leak not in text
+
+
+# ---- GET /tasks/stream ----
+
+
+@pytest.fixture
+def sse():
+    return FakeSse()
+
+
+@pytest.fixture
+def make_stream_app(pool, settings, store, sse, url, monkeypatch):
+    monkeypatch.setattr(task_routes, "KEEPALIVE_SECONDS", 0.2)
+
+    def make(configured=True, **overrides):
+        extra = (
+            {"taskboard_url": "http://taskboard", "taskboard_token": SecretStr(DELEGATE)}
+            if configured
+            else {}
+        )
+        client = httpx.AsyncClient(
+            base_url="http://taskboard", transport=httpx.MockTransport(sse.handler)
+        )
+        return create_device_app(
+            pool,
+            settings.model_copy(
+                update={
+                    "database_url": SecretStr(url),
+                    "poll_seconds": 0.2,
+                    **extra,
+                    **overrides,
+                }
+            ),
+            [Sketch()],
+            store,
+            taskboard=client if configured else None,
+        )
+
+    return make
+
+
+@contextlib.asynccontextmanager
+async def serving(app):
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://dev" + PREFIX, timeout=20
+        ) as c,
+    ):
+        yield c
+
+
+async def revoke_later(conn, delay, where=""):
+    await asyncio.sleep(delay)
+    await conn.execute(f"UPDATE devices SET revoked_at = now() {where}")
+
+
+def parse(text):
+    return [
+        dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
+        for block in text.split("\n\n")
+        if block.strip()
+    ]
+
+
+async def test_stream_relays_task_changed_to_device(make_stream_app, sse, conn, token):
+    async with serving(make_stream_app()) as c:
+
+        async def feed():
+            await asyncio.wait_for(sse.connected.wait(), 5)
+            sse.send(event("T-5"))
+            sse.send(event("T-6"))
+            await revoke_later(conn, 0.3)
+
+        feeder = asyncio.create_task(feed())
+        r = await c.get("/tasks/stream", headers=bearer(token))
+        await feeder
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    got = [p for p in parse(r.text) if p.get("event") == "task_changed"]
+    assert [json.loads(p["data"]) for p in got] == [{"key": "T-5"}, {"key": "T-6"}]
+    assert sse.requests[0].headers["authorization"] == f"Bearer {DELEGATE}"
+
+
+async def test_stream_keepalive_comment(make_stream_app, conn, token):
+    async with serving(make_stream_app()) as c:
+        revoker = asyncio.create_task(revoke_later(conn, 0.7))
+        r = await c.get("/tasks/stream", headers=bearer(token))
+        await revoker
+    assert r.text.count(": keepalive") >= 2
+
+
+async def test_stream_requires_device_token_401(make_stream_app, conn):
+    _, other = await devices.create(conn, "other", "x")
+    async with serving(make_stream_app()) as c:
+        for headers in ({}, bearer("unknown"), bearer(other)):
+            r = await c.get("/tasks/stream", headers=headers)
+            assert r.status_code == 401 and r.json()["error"] == "unauthorized"
+
+
+async def test_stream_ends_when_token_revoked(make_stream_app, sse, conn, token):
+    async with serving(make_stream_app()) as c:
+        revoker = asyncio.create_task(revoke_later(conn, 0.3))
+        r = await asyncio.wait_for(c.get("/tasks/stream", headers=bearer(token)), 5)
+        await revoker
+        assert r.status_code == 200
+        again = await c.get("/tasks/stream", headers=bearer(token))
+        assert again.status_code == 401
+        other = await c.get("/tasks", headers=bearer(token))
+        assert other.status_code == 401
+
+
+async def test_stream_unconfigured_503(make_stream_app, token):
+    async with serving(make_stream_app(configured=False)) as c:
+        r = await c.get("/tasks/stream", headers=bearer(token))
+    assert r.status_code == 503 and r.json()["error"] == "taskboard_unconfigured"
+
+
+async def test_stream_not_matched_by_task_key_route(make_stream_app, sse, conn, token):
+    async with serving(make_stream_app()) as c:
+        revoker = asyncio.create_task(revoke_later(conn, 0.3))
+        r = await c.get("/tasks/stream", headers=bearer(token))
+        await revoker
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert [q.url.path for q in sse.requests] == ["/taskboard/api/v1/stream"]
+
+
+async def test_two_devices_share_one_upstream_subscription(make_stream_app, sse, conn, token):
+    _, second = await devices.create(conn, "sketch", "second")
+    async with serving(make_stream_app()) as c:
+
+        async def feed():
+            await asyncio.wait_for(sse.connected.wait(), 5)
+            await asyncio.sleep(0.2)  # both devices subscribed
+            sse.send(event("T-3"))
+            await revoke_later(conn, 0.3)
+
+        feeder = asyncio.create_task(feed())
+        a, b = await asyncio.gather(
+            c.get("/tasks/stream", headers=bearer(token)),
+            c.get("/tasks/stream", headers=bearer(second)),
+        )
+        await feeder
+    for r in (a, b):
+        assert '"key":"T-3"' in r.text.replace(" ", "")
+    assert len(sse.requests) == 1

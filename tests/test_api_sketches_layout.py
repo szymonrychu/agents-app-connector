@@ -329,3 +329,17 @@ async def test_resent_region_points_at_the_newer_crop(device_api, token, conn):
         region_id,
     )
     assert images == [(310,)]
+
+
+async def test_resent_region_deletes_the_replaced_attachment_and_file(
+    device_api, token, conn, store
+):
+    cid = await conv_with_base(device_api, token, conn)
+    region_id = uuid.uuid4()
+    for w in (300, 310, 320):
+        lay = layout(ops=[image_op(region_id=region_id)])
+        r = await send(device_api, token, cid, lay, regions={(0, 0): region_png(w, 200)})
+        assert r.status_code == 202, r.text
+    kept = await rows(conn, "SELECT width, path FROM attachments WHERE kind = 'spec_image'")
+    assert [w for w, _ in kept] == [320]
+    assert len(stored_files(store)) == await count(conn, "attachments")

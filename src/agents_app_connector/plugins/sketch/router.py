@@ -340,6 +340,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
             meta_dict.pop("base_version")  # plain uploads keep their fingerprint
         fp = inbound.fingerprint(meta_dict, [_sha(d) for d in parts.in_field_order()])
         written: list[str] = []
+        replaced: list[str] = []
         try:
             async with pool.connection() as conn, conn.transaction():
                 existing = await _gate(conn, device.id, meta.client_id, fp)
@@ -405,7 +406,11 @@ def build_router(deps: PluginDeps) -> APIRouter:
                         ),
                     )
                     if part.region_id is not None:
-                        await spec_images.put(conn, conversation_id, part.region_id, part.id)
+                        old_path = await spec_images.put(
+                            conn, conversation_id, part.region_id, part.id
+                        )
+                        if old_path is not None:
+                            replaced.append(old_path)
                 await conversations.touch(conn, conversation_id)
                 await events.append(
                     conn,
@@ -417,6 +422,8 @@ def build_router(deps: PluginDeps) -> APIRouter:
             for path in written:
                 store.delete(path)
             raise
+        for path in replaced:
+            store.delete(path)
         return JSONResponse(
             {
                 "sketch_id": str(sketch_id),

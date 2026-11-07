@@ -28,15 +28,30 @@ async def put(
     conversation_id: uuid.UUID,
     region_id: uuid.UUID,
     attachment_id: uuid.UUID,
-) -> None:
+) -> str | None:
     """Add, or point an existing region id at the newer crop (a re-sent op whose earlier upload
-    no version reported; a reported one is refused as op_replayed before this)."""
+    no version reported; a reported one is refused as op_replayed before this). The replaced
+    attachment is deleted; its stored path is returned for the caller to remove, None when
+    the region was new."""
+    cur = await conn.execute(
+        "SELECT attachment_id FROM spec_images WHERE conversation_id = %s AND region_id = %s "
+        "FOR UPDATE",
+        (conversation_id, region_id),
+    )
+    old = await cur.fetchone()
     await conn.execute(
         "INSERT INTO spec_images (conversation_id, region_id, attachment_id) VALUES (%s, %s, %s) "
         "ON CONFLICT (conversation_id, region_id) DO UPDATE "
         "SET attachment_id = EXCLUDED.attachment_id, created_at = now()",
         (conversation_id, region_id, attachment_id),
     )
+    if old is None:
+        return None
+    cur = await conn.execute(
+        "DELETE FROM attachments WHERE id = %s AND purged_at IS NULL RETURNING path", (old[0],)
+    )
+    row = await cur.fetchone()
+    return None if row is None else row[0]
 
 
 async def get(

@@ -81,6 +81,25 @@ in the conversation. The field is part of the idempotency fingerprint. The agent
 version `spec_version` in full with the page images ("Annotated spec" prompt rule), on first and
 follow runs alike, and returns the next version; any existing version may be annotated.
 
+Notebook pages add, per page index `i`, an optional `layout.<i>.json` (at most
+`APPCONN_MAX_LAYOUT_BYTES`) and the `region.<i>.<k>.png` parts its image ops name (k below
+`APPCONN_MAX_REGIONS_PER_PAGE`). A layout is `{version: 1, geometry: {cell, row_pitch, top, rows,
+text_left, margin_left}, segments: [{id: "p<page>-r<row>-<n>", row, x0, x1, strokes}], runs:
+[{line_id, row, x0}], ops: [{id, kind: replace|delete|insert|image, target?: {line_id, from, to,
+quote}, at?: {line_id, offset, mode: inline|after_line}, strokes, rect?: [x, y, w, h], region?:
+{id, part, after_line}}]}` (unknown keys are 422). Stroke indices refer to `strokes.<i>.json` (no
+strokes part allows none), segments, runs and rects lie inside the page canvas, op and region ids
+are unique, every region part is named by exactly one image op of its page and every named part is
+present (422 `invalid_request`). `meta.base_version` (needs `conversation_id`, excludes
+`annotates`) is the spec version whose text the board showed and is required when any layout has
+ops: 409 `stale_base` when it is not the latest version, 409 `op_replayed` when an op id was
+already reported by a stored version, 422 `invalid_request` for a line id that is not in that
+version and 422 `stale_target` when a target's `quote` no longer equals the source text at
+`[from, to)` of its line. Layouts are kept like sketch files; region images are stored for the
+conversation's lifetime (never purged, deleted with the conversation), count toward the upload
+size and the device quota, and are served by the images route. Layout and region parts are part
+of the idempotency fingerprint; neither is attached to the translator message.
+
 ### `GET /app/v1/sketch/conversations`
 
 The device's conversations: `[{id, title, created_at, latest_spec_version,
@@ -110,7 +129,12 @@ The same events as server-sent events; the SSE id is the cursor and `Last-Event-
 
 ### `GET /app/v1/sketch/conversations/{conversation_id}/spec`
 
-Latest spec: `{version, markdown, created, sketch_ids}`. 404 `no_spec`.
+Latest spec: `{version, markdown, created, sketch_ids, layout}`. 404 `no_spec`. `layout` is
+null unless the version was written from notebook pages (or reverted to one): `{lines:
+[{line_id, source_line, origin}], ops: [{id, status: applied|rejected, note}], base_version,
+reverted_from}`. Every markdown source line (1-based) has a line id `L<n>`; a kept line keeps
+its id, every other line gets the next number of the conversation (never reused, also after a
+revert). `origin` is `{segments}`, `{kept}`, `{op}` (several may combine) or null.
 
 ### `GET /app/v1/sketch/conversations/{conversation_id}/spec.md`
 
@@ -119,6 +143,21 @@ Latest spec as `text/markdown`.
 ### `GET /app/v1/sketch/conversations/{conversation_id}/spec/{version}`
 
 One spec version, same shape as the latest spec.
+
+### `POST /app/v1/sketch/conversations/{conversation_id}/spec/{version}/revert`
+
+Revert to version N: body `{base_version}` (the latest version the app shows). Stores a copy of
+version N (markdown, sketch ids and layout with its line ids unchanged; ops cleared,
+`base_version` and `reverted_from` set) as the next version and appends a `spec` event. 201
+`{version, reverted_from}`. 404 `no_spec` when N does not exist, 409 `stale_base` when
+`base_version` is not the latest version (also a replay after success: the base check is the
+idempotency), 409 `busy` while a sketch or message of the conversation is queued or being
+translated, 422 when N is already the latest.
+
+### `GET /app/v1/sketch/conversations/{conversation_id}/images/{region_id}.png`
+
+A region image a spec references as `images/<region_id>.png`, with an `ETag` (304 on
+`If-None-Match`). 404 `not_found` for an unknown region or another device's conversation.
 
 ### `GET /app/v1/sketch/conversations/{conversation_id}/feedback`
 
@@ -141,7 +180,9 @@ and the allowed presets a spec can be handed to. 502 or 503 when the orchestrato
 
 Hand the latest spec to a session: body `{client_id, session: "<slug>" | {"preset": "<name>"}}`.
 202 `{session_slug}` plus the additive `handoff_id`; progress arrives as `handoff` events.
-404 `unknown_session`, 409 `no_spec`, 422 `preset_not_allowed`.
+404 `unknown_session`, 409 `no_spec`, 422 `preset_not_allowed`. The region images the spec
+references as `images/<id>.png` are attached to the message as `<id>.png`, in document order, at
+most 8 and 8 MiB per message (the orchestrator's caps); the rest are listed by name in the text.
 
 ### Task relay (Tasks tab)
 
@@ -241,9 +282,17 @@ sha256 and the session id; the token is never logged or stored), then maps the s
 in-progress turn of the conversation bound to it. A missing `X-Orch-Session` header (no fallback),
 a malformed one or a refused bearer answers 401, an unreachable orchestrator 503.
 
-- `document_write(markdown)` stores the next spec version of the conversation: the document is a
-  faithful transcription of the page and nothing else. Each call is a new version. Errors:
-  `no_active_turn`, `empty_document`, `document_too_large` (`APPCONN_MAX_DOCUMENT_BYTES`).
+- `document_write(markdown, lines?, ops?)` stores the next spec version of the conversation: the
+  document is a faithful transcription of the page and nothing else. Each call is a new version.
+  Errors: `no_active_turn`, `empty_document`, `document_too_large` (`APPCONN_MAX_DOCUMENT_BYTES`),
+  `unknown_image` (an `images/<id>.png` reference that is not a region image of the
+  conversation). For a turn whose upload has layouts, `lines` (`[{n, segments?, kept?, op?}]`,
+  the provenance of source line n) and `ops` (`[{id, status: applied|rejected, note?}]`) must
+  cover every segment id and op id of the upload (`layout_incomplete` naming the missing ids, so
+  the model retries in the same turn; `layout_invalid` for malformed entries, ids not in the
+  upload or a kept id not in the base version); the version stores the layout with
+  connector-assigned line ids. On other turns non-empty `lines` or `ops` are
+  `layout_not_expected`.
 - `feedback_add(kind, text, where?)` stores one feedback item (`question`, `uncertain`,
   `illegible` or `note`; text up to 2000 characters, where up to 200) and appends a `feedback`
   event. Errors: `no_active_turn`, `empty_text`, `text_too_long`, `where_too_long`,
@@ -299,6 +348,8 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_MCP_PORT` | 8002 | translator tools port, must differ from the admin and device ports |
 | `APPCONN_MAX_DOCUMENT_BYTES` | 262144 | `document_write` size cap (1024 to 1048576) |
 | `APPCONN_MAX_FEEDBACK_PER_RUN` | 30 | `feedback_add` items per turn (1 to 200) |
+| `APPCONN_MAX_REGIONS_PER_PAGE` | 4 | `region.<i>.<k>.png` parts per notebook page (0 to 16) |
+| `APPCONN_MAX_LAYOUT_BYTES` | 262144 | size cap of one `layout.<i>.json` part (1024 to 1048576) |
 
 ## Subcommands
 

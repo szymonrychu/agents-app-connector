@@ -12,6 +12,14 @@ requirements; its expected precision is stricter (0.95 instead of 0.9).
 
 10-annotated-spec also writes specs/10-annotated-spec.png (the page without notes, uploaded
 first to get spec v1) and specs/10-annotated-spec.md (the text it prints).
+
+12-15 are notebook pages (page canvas 1404 x 1872 px, rows of 106 px from y 106, margin from
+x 983; the PNG is the page scaled to a 1568 px long edge, no grid). Each also writes
+layouts/<item>.json (the page layout the app would send), strokes/<item>.json (its recorded
+strokes in page px) and, for 13-15, a base page: specs/<item>.png with its own
+layouts/<item>.base.json and strokes/<item>.base.json, and specs/<item>.md, the text the base
+should become (spec v1, one source line per row). The annotated page shows that text printed on
+its rows. 15-image-region also writes regions/15-image-region.0.0.png, the app's crop.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ import json
 import math
 import random
 import re
+import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -362,6 +371,236 @@ def bare_wireframe(rng: random.Random) -> Sheet:
     return s
 
 
+NB_W, NB_H = 1404, 1872
+NB_SCALE = 1568 / NB_H
+TOP, PITCH, MARGIN_LEFT, TEXT_LEFT = 106, 106, 983, 53
+GEOMETRY = {
+    "cell": 53,
+    "row_pitch": PITCH,
+    "top": TOP,
+    "rows": 16,
+    "text_left": TEXT_LEFT,
+    "margin_left": MARGIN_LEFT,
+}
+PRINT_H = 30  # printed glyph height: 40 px text, baseline 11 px above the row line
+PRINT_ADVANCE = ADVANCE * PRINT_H / 6
+
+
+def _id(name: str) -> str:
+    """A stable uuid for an op or a region of an eval item."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"agents-app-connector/eval/{name}"))
+
+
+class NotebookSheet(Sheet):
+    """A notebook page in page px, drawn scaled to the upload size, recording its pen strokes
+    (page px) and the layout the app would send."""
+
+    def __init__(self, rng: random.Random):
+        super().__init__(rng, (round(NB_W * NB_SCALE), round(NB_H * NB_SCALE)))
+        self.strokes: list[dict] = []
+        self.layout: dict = {
+            "version": 1,
+            "geometry": GEOMETRY,
+            "segments": [],
+            "runs": [],
+            "ops": [],
+        }
+        self.regions: dict[str, Image.Image] = {}
+        self.base_sheet: NotebookSheet | None = None
+
+    def _stroke(self, pts: list[tuple[float, float]], jitter: float = 1.0) -> None:
+        pts = [(x + self._j(jitter), y + self._j(jitter)) for x, y in pts]
+        self.strokes.append(
+            {
+                "tool": "pen",
+                "color": "black",
+                "points": [[round(x, 1), round(y, 1)] for x, y in pts],
+            }
+        )
+        scaled = [(x * NB_SCALE, y * NB_SCALE) for x, y in pts]
+        self.d.line(scaled, fill=self.ink, width=PEN, joint="curve")
+
+    def mark(self) -> int:
+        return len(self.strokes)
+
+    def since(self, first: int) -> list[int]:
+        return list(range(first, len(self.strokes)))
+
+    def printed(self, row: int, s: str, line_id: str) -> None:
+        """A rendered spec line on its row (no pen strokes, no jitter)."""
+        k = PRINT_H / 6
+        y = TOP + (row + 1) * PITCH - 11 - PRINT_H
+        for i, ch in enumerate(s.upper()):
+            for line in GLYPHS.get(ch, []):
+                pts = [
+                    ((TEXT_LEFT + i * PRINT_ADVANCE + px * k) * NB_SCALE, (y + py * k) * NB_SCALE)
+                    for px, py in line
+                ]
+                self.d.line(pts, fill=self.ink, width=3, joint="curve")
+        self.layout["runs"].append({"line_id": line_id, "row": row, "x0": TEXT_LEFT})
+
+    @staticmethod
+    def char_x(i: int) -> float:
+        """Left edge of printed character i of a run."""
+        return TEXT_LEFT + i * PRINT_ADVANCE
+
+    def write_row(self, row: int, x: float, s: str, h: float = 44) -> str:
+        """Handwriting on a row's text band; returns its segment id."""
+        first = self.mark()
+        self.text(x, TOP + (row + 1) * PITCH - h - 8, s, h)
+        n = sum(1 for seg in self.layout["segments"] if seg["row"] == row)
+        seg_id = f"p0-r{row}-{n}"
+        self.layout["segments"].append(
+            {
+                "id": seg_id,
+                "row": row,
+                "x0": round(x, 1),
+                "x1": round(x + self.text_width(s, h), 1),
+                "strokes": self.since(first),
+            }
+        )
+        return seg_id
+
+    def op(self, **fields) -> str:
+        self.layout["ops"].append(fields)
+        return fields["id"]
+
+
+def _base_page(rng: random.Random, lines: list[str]) -> NotebookSheet:
+    """The handwritten page that becomes spec v1: one line per row from row 1."""
+    b = NotebookSheet(rng)
+    for row, text in enumerate(lines, 1):
+        b.write_row(row, TEXT_LEFT + 7, text)
+    b.base_md = "".join(t.capitalize() + "\n" for t in lines)
+    return b
+
+
+def _with_base(s: NotebookSheet, base: NotebookSheet) -> None:
+    s.base_sheet = base
+    s.base_md = base.base_md
+    for row, text in enumerate(base.base_md.splitlines(), 1):
+        s.printed(row, text, f"L{row}")
+
+
+def notebook_lines(rng: random.Random) -> Sheet:
+    """New handwriting on rows; row 2 holds two segments (gap over two cells)."""
+    s = NotebookSheet(rng)
+    ids = [
+        s.write_row(1, 60, "PLAN FOR MONDAY"),
+        s.write_row(2, 60, "CALL THE BANK"),
+        s.write_row(2, 640, "PAY RENT"),
+        s.write_row(3, 60, "FIX THE BIKE"),
+        s.write_row(5, 60, "BOOK FLIGHTS"),
+    ]
+    s.extra = {
+        "lines": [{"n": n, "segments": [i]} for n, i in enumerate(ids, 1)],
+        "ops": [],
+    }
+    return s
+
+
+def replace_and_strike(rng: random.Random) -> Sheet:
+    """Base v1 (three rows); BREAD written above "milk", "call bob" struck out."""
+    base = _base_page(rng, ["BUY MILK", "BUY EGGS", "CALL BOB"])
+    s = NotebookSheet(rng)
+    _with_base(s, base)
+    s.words = []
+    first = s.mark()
+    x, y = s.char_x(4), TOP + PITCH + 6
+    s.text(x, y, "BREAD", 36)
+    replace = s.op(
+        id=_id("13-replace"),
+        kind="replace",
+        target={"line_id": "L1", "from": 4, "to": 8, "quote": "milk"},
+        strokes=s.since(first),
+        rect=[round(x, 1), y, round(s.text_width("BREAD", 36), 1), 40],
+    )
+    first = s.mark()
+    mid = TOP + 3 * PITCH + PITCH * 3 / 4 - 4
+    s.line((s.char_x(0) - 6, mid), (s.char_x(8) + 6, mid))
+    strike = s.op(
+        id=_id("13-strike"),
+        kind="delete",
+        target={"line_id": "L3", "from": 0, "to": 8, "quote": "Call bob"},
+        strokes=s.since(first),
+    )
+    s.words = ["buy", "bread", "eggs"]
+    s.extra = {
+        "must_not": ["milk", "call", "bob"],
+        "lines": [{"n": 1, "kept": "L1", "op": replace}, {"n": 2, "kept": "L2"}],
+        "ops": [{"id": replace, "status": "applied"}, {"id": strike, "status": "applied"}],
+    }
+    return s
+
+
+def margin_insert(rng: random.Random) -> Sheet:
+    """Base v1 (two rows); a boxed margin note with an arrow to the end of "buy milk"."""
+    base = _base_page(rng, ["BUY MILK", "CALL BOB"])
+    s = NotebookSheet(rng)
+    _with_base(s, base)
+    s.words = []
+    first = s.mark()
+    box = (1010.0, TOP + 2 * PITCH + 10.0, 1370.0, TOP + 3 * PITCH - 10.0)
+    s.rect(*box)
+    s.text(1040, box[1] + 22, "AND JAM", 40)
+    tip = (s.char_x(8) + 4, TOP + PITCH + PITCH * 3 / 4)
+    s.arrow((box[0], (box[1] + box[3]) / 2), tip)
+    insert = s.op(
+        id=_id("14-insert"),
+        kind="insert",
+        at={"line_id": "L1", "offset": 8, "mode": "inline"},
+        strokes=s.since(first),
+        rect=[box[0], box[1], box[2] - box[0], box[3] - box[1]],
+    )
+    s.words = ["buy", "milk", "and", "jam", "call", "bob"]
+    s.extra = {
+        "lines": [{"n": 1, "kept": "L1", "op": insert}, {"n": 2, "kept": "L2"}],
+        "ops": [{"id": insert, "status": "applied"}],
+    }
+    return s
+
+
+def image_region(rng: random.Random) -> Sheet:
+    """Base v1 (two rows); an image region framed below it holds a drawn shed with a label that
+    must not be transcribed."""
+    base = _base_page(rng, ["GARDEN PLAN", "PLANT ROSES"])
+    s = NotebookSheet(rng)
+    _with_base(s, base)
+    s.words = []
+    first = s.mark()
+    frame = (120.0, TOP + 3 * PITCH + 20.0, 760.0, TOP + 8 * PITCH - 20.0)
+    for a, b in (
+        ((frame[0], frame[1]), (frame[2], frame[1])),
+        ((frame[2], frame[1]), (frame[2], frame[3])),
+        ((frame[2], frame[3]), (frame[0], frame[3])),
+        ((frame[0], frame[3]), (frame[0], frame[1])),
+    ):
+        s.dashed(a, b)
+    s.rect(300, 560, 580, 820)
+    s.line((280, 570), (440, 440))
+    s.line((440, 440), (600, 570))
+    s.text(360, 660, "SHED", 44)
+    region_id = _id("15-region")
+    rect = [frame[0], frame[1], frame[2] - frame[0], frame[3] - frame[1]]
+    op = s.op(
+        id=_id("15-image"),
+        kind="image",
+        strokes=s.since(first),
+        rect=rect,
+        region={"id": region_id, "part": "region.0.0.png", "after_line": "L2"},
+    )
+    crop = tuple(round(v * NB_SCALE) for v in frame)
+    s.regions["region.0.0.png"] = s.img.crop(crop)
+    s.words = ["garden", "plan", "plant", "roses"]
+    s.extra = {
+        "must_not": ["shed"],
+        "images": [region_id],
+        "lines": [{"n": 1, "kept": "L1"}, {"n": 2, "kept": "L2"}, {"n": 3, "op": op}],
+        "ops": [{"id": op, "status": "applied"}],
+    }
+    return s
+
+
 ITEMS = [
     ("01-notes", notes, None),
     ("02-flowchart", flowchart, "flowchart"),
@@ -374,6 +613,10 @@ ITEMS = [
     ("09-colour-shapes", colour_shapes, "flowchart"),
     ("10-annotated-spec", annotated_spec, None),
     ("11-bare-wireframe", bare_wireframe, None),
+    ("12-notebook-lines", notebook_lines, None),
+    ("13-replace-and-strike", replace_and_strike, None),
+    ("14-margin-insert", margin_insert, None),
+    ("15-image-region", image_region, None),
 ]
 
 
@@ -398,6 +641,32 @@ def generate(out: Path) -> None:
             (out / "specs").mkdir(parents=True, exist_ok=True)
             sheet.base.save(out / "specs" / f"{name}.png", "PNG")
             (out / "specs" / f"{name}.md").write_text(sheet.base_md)
+        if isinstance(sheet, NotebookSheet):
+            _write_notebook(out, name, sheet)
+
+
+def _json(path: Path, doc: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2) + "\n")
+
+
+def _strokes_doc(sheet: NotebookSheet) -> dict:
+    return {"version": 1, "canvas": {"w": NB_W, "h": NB_H, "dpi": 227}, "strokes": sheet.strokes}
+
+
+def _write_notebook(out: Path, name: str, sheet: NotebookSheet) -> None:
+    _json(out / "layouts" / f"{name}.json", sheet.layout)
+    _json(out / "strokes" / f"{name}.json", _strokes_doc(sheet))
+    for part, img in sheet.regions.items():
+        (out / "regions").mkdir(parents=True, exist_ok=True)
+        img.save(out / "regions" / f"{name}.{part.removeprefix('region.')}", "PNG")
+    base = sheet.base_sheet
+    if base is not None:
+        (out / "specs").mkdir(parents=True, exist_ok=True)
+        base.img.save(out / "specs" / f"{name}.png", "PNG")
+        (out / "specs" / f"{name}.md").write_text(base.base_md)
+        _json(out / "layouts" / f"{name}.base.json", base.layout)
+        _json(out / "strokes" / f"{name}.base.json", _strokes_doc(base))
 
 
 def main() -> None:

@@ -19,6 +19,7 @@ from fastapi.routing import APIRoute
 from agents_app_connector.api.admin import create_admin_app
 from agents_app_connector.api.device import create_device_app
 from agents_app_connector.plugins import REGISTRY
+from agents_app_connector.plugins.sketch.layout import PageLayout, SpecLayout
 from agents_app_connector.settings import Settings
 
 DEVICE = "/app/v1/sketch"
@@ -44,11 +45,16 @@ ERRORS = {
     404: "no such conversation, attachment or device (not_found, no_spec, unknown_session)",
     409: (
         "a request with this client_id is in progress (in_progress), no spec yet (no_spec), "
-        "or the device is already paired (already_paired)"
+        "the device is already paired (already_paired), base_version is not the latest spec "
+        "version (stale_base), an op id was already reported by an earlier version "
+        "(op_replayed), or a translator turn of the conversation is open (busy)"
     ),
     410: "the attachment was purged (purged)",
     413: "body or part too large, or device quota exceeded (too_large, quota_exceeded)",
-    422: "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)",
+    422: (
+        "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op "
+        "target no longer quotes the base version's source text (stale_target)"
+    ),
     429: (
         "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices "
         "wait for a pairing code (too_many_pending)"
@@ -204,6 +210,12 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
         "application/json",
         {"$ref": "#/components/schemas/Spec"},
     ),
+    ("post", "/conversations/{conversation_id}/spec/{version}/revert"): (
+        "201",
+        "the new version, a copy of version N (markdown and layout, line ids unchanged)",
+        "application/json",
+        {"type": "object", "properties": {"version": INT, "reverted_from": INT}},
+    ),
     ("get", "/conversations/{conversation_id}/feedback"): (
         "200",
         "translator feedback items after the cursor, oldest first (at most 100)",
@@ -215,6 +227,12 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
                 "cursor": INT,
             },
         },
+    ),
+    ("get", "/conversations/{conversation_id}/images/{region_id}.png"): (
+        "200",
+        "a region image of the conversation with an ETag; 304 on a matching If-None-Match",
+        "image/png",
+        {"type": "string", "format": "binary"},
     ),
     ("get", "/attachments/{attachment_id}"): (
         "200",
@@ -357,12 +375,17 @@ EXTRA_SCHEMAS: dict[str, Any] = {
     "Spec": {
         "type": "object",
         "title": "Spec",
-        "required": ["version", "markdown", "created", "sketch_ids"],
+        "description": (
+            "layout is null for versions not written from notebook pages; otherwise it maps "
+            "every markdown source line to its stable line id and lists the op statuses."
+        ),
+        "required": ["version", "markdown", "created", "sketch_ids", "layout"],
         "properties": {
             "version": INT,
             "markdown": STR,
             "created": {"type": "string", "format": "date-time"},
             "sketch_ids": {"type": "array", "items": UUID},
+            "layout": {"anyOf": [{"$ref": "#/components/schemas/SpecLayout"}, {"type": "null"}]},
         },
     },
     "Feedback": {
@@ -397,11 +420,38 @@ EXTRA_SCHEMAS: dict[str, Any] = {
                     '"pages": [{"page": int, "doc_page": int, "lines": [int, int]}]}}. '
                     "annotates needs conversation_id and answers 404 no_spec when that spec "
                     "version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) "
-                    "belongs to pages[i]; every page needs its png."
+                    "belongs to pages[i]; every page needs its png. "
+                    '"base_version"?: int >= 1 is the spec version whose text the board '
+                    "showed; it needs conversation_id, excludes annotates, is required when any "
+                    "layout carries ops, and answers 409 stale_base when it is not the latest "
+                    "version."
                 ),
             },
             "sketch.0.png": {"type": "string", "format": "binary"},
             "strokes.0.json": {"type": "string", "format": "binary"},
+            "layout.0.json": {
+                "type": "string",
+                "format": "binary",
+                "description": (
+                    "optional notebook layout.<i>.json of pages[i] (JSON PageLayout, at most "
+                    "APPCONN_MAX_LAYOUT_BYTES). Stroke indices refer to strokes.<i>.json (no "
+                    "strokes part means no indices), rects and segments lie inside the canvas, "
+                    "op ids are unique uuids never reported before (409 op_replayed), line ids "
+                    "exist in base_version and each target quote equals the source text at "
+                    "[from, to) (422 stale_target)."
+                ),
+            },
+            "region.0.0.png": {
+                "type": "string",
+                "format": "binary",
+                "description": (
+                    "region.<i>.<k>.png: the PNG an image op of pages[i] names in region.part "
+                    "(k < APPCONN_MAX_REGIONS_PER_PAGE). Every region part must be referenced "
+                    "and every referenced part present. Stored for the conversation's lifetime "
+                    "and served by the images route; counts toward the upload size and the "
+                    "device quota."
+                ),
+            },
         },
     },
 }
@@ -420,7 +470,9 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/conversations/{conversation_id}/spec.md"): (401, 404, 429),
     ("get", "/conversations/{conversation_id}/spec/{version}"): (401, 404, 422, 429),
     ("get", "/conversations/{conversation_id}/feedback"): (401, 404, 422, 429),
+    ("post", "/conversations/{conversation_id}/spec/{version}/revert"): (401, 404, 409, 422, 429),
     ("get", "/attachments/{attachment_id}"): (401, 404, 410, 429),
+    ("get", "/conversations/{conversation_id}/images/{region_id}.png"): (401, 404, 422, 429),
     ("get", "/handoff/targets"): (401, 429, 502, 503),
     ("get", "/tasks"): (401, 422, 429, 503),
     ("post", "/tasks"): (401, 413, 422, 429, 503),
@@ -460,7 +512,13 @@ SUMMARIES = {
     "/conversations/{conversation_id}/spec.md": "Latest spec as markdown",
     "/conversations/{conversation_id}/spec/{version}": "One spec version",
     "/conversations/{conversation_id}/feedback": "Translator feedback after a cursor",
+    "/conversations/{conversation_id}/spec/{version}/revert": (
+        "Revert to spec version N: store a copy of it as the next version"
+    ),
     "/attachments/{attachment_id}": "Download a stored sketch file",
+    "/conversations/{conversation_id}/images/{region_id}.png": (
+        "A region image the spec references as images/<region_id>.png"
+    ),
     "/handoff/targets": "Sessions and presets a spec can be handed to",
     "/conversations/{conversation_id}/handoff": "Hand the latest spec to a session",
     "/tasks": "List or create tasks (relayed to the taskboard)",
@@ -474,6 +532,16 @@ SUMMARIES = {
     "/devices/{device_id}/code": "Issue a new pairing code for an unpaired device",
     "/devices/{device_id}": "Revoke a device",
 }
+
+
+def _model_schemas() -> dict[str, Any]:
+    """Schemas of the notebook wire models, with their nested models as components."""
+    out: dict[str, Any] = {}
+    for model in (PageLayout, SpecLayout):
+        schema = model.model_json_schema(ref_template="#/components/schemas/{model}", by_alias=True)
+        out.update(schema.pop("$defs", {}))
+        out[model.__name__] = schema
+    return out
 
 
 def _settings() -> Settings:
@@ -599,6 +667,7 @@ def build_openapi() -> dict[str, Any]:
         schemas.pop(name, None)
     schemas.update(ERROR_SCHEMAS)
     schemas.update(EXTRA_SCHEMAS)
+    schemas.update(_model_schemas())
     doc = {
         "openapi": device["openapi"],
         "info": {

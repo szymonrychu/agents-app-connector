@@ -61,3 +61,26 @@ async def test_purged_attachment_is_410(device_api, token, conn, upload):
     await conn.execute("UPDATE attachments SET purged_at = now()")
     r = await device_api.get(f"/attachments/{sketch_id}", headers=bearer(token))
     assert r.status_code == 410 and r.json()["error"] == "purged"
+
+
+async def test_spec_json_includes_layout(device_api, token, conn, upload):
+    from agents_app_connector.db import specs
+
+    _, cid = await upload()
+    lay = {
+        "lines": [{"line_id": "L1", "source_line": 1, "origin": {"segments": ["p0-r1-0"]}}],
+        "ops": [{"id": str(uuid.uuid4()), "status": "applied", "note": None}],
+        "base_version": None,
+        "reverted_from": None,
+    }
+    await specs.add(conn, uuid.UUID(cid), "a", None, [], None, layout=lay)
+    for path in ("spec", "spec/1"):
+        r = await device_api.get(f"/conversations/{cid}/{path}", headers=bearer(token))
+        assert r.status_code == 200 and r.json()["layout"] == lay
+
+
+async def test_spec_json_layout_null_for_plain(device_api, token, conn, upload):
+    _, cid = await upload()
+    await seed_spec(conn, cid, 1, "# one")
+    r = await device_api.get(f"/conversations/{cid}/spec", headers=bearer(token))
+    assert r.status_code == 200 and r.json()["layout"] is None

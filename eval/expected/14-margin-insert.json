@@ -1,0 +1,30 @@
+{
+  "words": [
+    "buy",
+    "milk",
+    "and",
+    "jam",
+    "call",
+    "bob"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8,
+  "min_precision": 0.9,
+  "lines": [
+    {
+      "n": 1,
+      "kept": "L1",
+      "op": "ef809e5b-f4cd-5c01-b1c1-5498a1a19435"
+    },
+    {
+      "n": 2,
+      "kept": "L2"
+    }
+  ],
+  "ops": [
+    {
+      "id": "ef809e5b-f4cd-5c01-b1c1-5498a1a19435",
+      "status": "applied"
+    }
+  ]
+}

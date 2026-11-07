@@ -75,6 +75,12 @@ async def list_for(conn: psycopg.AsyncConnection, device_id: uuid.UUID) -> list[
         return await cur.fetchall()
 
 
+async def lock(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> None:
+    """Row lock until the transaction ends: serialises the spec version writers of one
+    conversation (revert, upload base check)."""
+    await conn.execute("SELECT 1 FROM conversations WHERE id = %s FOR UPDATE", (conversation_id,))
+
+
 async def touch(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> None:
     await conn.execute(
         "UPDATE conversations SET updated_at = now() WHERE id = %s", (conversation_id,)

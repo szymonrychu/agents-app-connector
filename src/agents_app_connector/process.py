@@ -65,7 +65,7 @@ async def run_app(
         app = create_device_app(
             pool, settings, plugins, store, orchestrator=orchestrator, taskboard=taskboard
         )
-        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(orchestrator).verify)
+        mcp_app = build_mcp_app(pool, settings, OrchestratorIdentity(orchestrator).verify, store)
         units = {
             "worker": Worker(orchestrator, pool, settings, store),
             "tracker": Tracker(orchestrator, pool, settings),

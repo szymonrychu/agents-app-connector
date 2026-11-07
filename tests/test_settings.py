@@ -174,3 +174,11 @@ def test_mcp_port_must_differ(monkeypatch, port):
 def test_translator_tool_limits_are_bounded(monkeypatch, name, value):
     monkeypatch.setenv(f"APPCONN_{name}", value)
     assert f"APPCONN_{name}" in problems()
+
+
+def test_layout_and_region_limits_defaults(monkeypatch):
+    s = load_settings(Settings)
+    assert (s.max_regions_per_page, s.max_layout_bytes) == (4, 262144)
+    monkeypatch.setenv("APPCONN_MAX_REGIONS_PER_PAGE", "17")
+    monkeypatch.setenv("APPCONN_MAX_LAYOUT_BYTES", "100")
+    assert {"APPCONN_MAX_REGIONS_PER_PAGE", "APPCONN_MAX_LAYOUT_BYTES"} <= set(problems())

@@ -24,7 +24,9 @@ import httpx
 
 TOKEN_ENV = "APPCONN_EVAL_TOKEN"
 ROOT = Path(__file__).resolve().parent.parent
+EVAL = ROOT / "eval"
 POLL_WAIT = 25
+NOTEBOOK_CANVAS = {"w": 1404, "h": 1872, "dpi": 227}
 
 
 @dataclass
@@ -61,6 +63,7 @@ def _document_words(md: str) -> list[str]:
     mermaid blocks reduced to their labels."""
     text = re.sub(r"\[\[\?([^\]|]*)[^\]]*\]\]", r" \1 ", md)
     text = re.sub(r"\[\[[^\]]*\]\]", " ", text).replace("[illegible]", " ")
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)  # an image reference carries no word
     kept: list[str] = []
     fence: str | None = None
     for line in text.splitlines():
@@ -173,6 +176,106 @@ def _upload(client: httpx.Client, base: str, png: bytes, **meta_extra) -> str:
     return up.json()["conversation_id"]
 
 
+def _notebook_upload(
+    client: httpx.Client, base: str, name: str, suffix: str = "", **meta_extra
+) -> str:
+    """Upload a notebook page with its strokes, layout and region parts; returns the
+    conversation id. `suffix` ".base" picks the base page of an item."""
+    png = (EVAL / ("specs" if suffix else "sketches") / f"{name}.png").read_bytes()
+    layout = meta_extra.pop("layout", None)
+    if layout is None:
+        layout = json.loads((EVAL / "layouts" / f"{name}{suffix}.json").read_text())
+    meta = {
+        "client_id": str(uuid.uuid4()),
+        "pages": [{"page": 0, "canvas": NOTEBOOK_CANVAS}],
+        **meta_extra,
+    }
+    files = {
+        "sketch.0.png": ("sketch.0.png", png, "image/png"),
+        "strokes.0.json": (
+            "strokes.0.json",
+            (EVAL / "strokes" / f"{name}{suffix}.json").read_bytes(),
+            "application/json",
+        ),
+        "layout.0.json": ("layout.0.json", json.dumps(layout).encode(), "application/json"),
+    }
+    if not suffix:
+        for path in sorted((EVAL / "regions").glob(f"{name}.*.png")):
+            part = "region." + path.name.removeprefix(f"{name}.")
+            files[part] = (part, path.read_bytes(), "image/png")
+    up = client.post(f"{base}/sketches", data={"meta": json.dumps(meta)}, files=files)
+    up.raise_for_status()
+    return up.json()["conversation_id"]
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def rebase_layout(layout: dict, base_md: str, spec: dict) -> dict:
+    """The item layout with the line ids of the model-written base version: L<k> of the eval
+    base text (source line k of specs/<item>.md) maps to the version's line whose words match,
+    and each target's quote is read again from that line."""
+    ids = {x["source_line"]: x["line_id"] for x in (spec.get("layout") or {}).get("lines", [])}
+    written = spec["markdown"].splitlines()
+    found: dict[str, tuple[str, str, str]] = {}
+    for k, text in enumerate(base_md.splitlines(), 1):
+        for n, got in enumerate(written, 1):
+            if n in ids and _norm(got) == _norm(text):
+                found[f"L{k}"] = (ids[n], got, text)
+                break
+    out = json.loads(json.dumps(layout))
+
+    def line_id(old: str) -> str:
+        return found[old][0] if old in found else old
+
+    for run in out["runs"]:
+        run["line_id"] = line_id(run["line_id"])
+    for op in out["ops"]:
+        target, at, region = op.get("target"), op.get("at"), op.get("region")
+        if target and target["line_id"] in found:
+            _, got, _ = found[target["line_id"]]
+            i = got.lower().find(target["quote"].lower())
+            if i >= 0:
+                target.update({"from": i, "to": i + len(target["quote"])})
+                target["quote"] = got[i : target["to"]]
+        if at and at["line_id"] in found:
+            _, got, text = found[at["line_id"]]
+            at["offset"] = len(got) if at["offset"] >= len(text) else min(at["offset"], len(got))
+        for item in (target, at):
+            if item:
+                item["line_id"] = line_id(item["line_id"])
+        if region and region.get("after_line"):
+            region["after_line"] = line_id(region["after_line"])
+    return out
+
+
+def _spec_json(client: httpx.Client, base: str, conversation: str) -> dict:
+    r = client.get(f"{base}/conversations/{conversation}/spec")
+    r.raise_for_status()
+    return r.json()
+
+
+def notebook_checks(spec: dict, expected: dict) -> dict:
+    """Op statuses as expected, every expected segment id in the line provenance, the expected
+    image references present and no forbidden word written."""
+    layout = spec.get("layout") or {}
+    got_ops = {o["id"]: o["status"] for o in layout.get("ops", [])}
+    segments = {
+        s
+        for line in layout.get("lines", [])
+        for s in (line.get("origin") or {}).get("segments", [])
+    }
+    want_segments = {s for line in expected.get("lines", []) for s in line.get("segments", [])}
+    words = set(_document_words(spec["markdown"]))
+    return {
+        "ops_ok": all(got_ops.get(o["id"]) == o["status"] for o in expected.get("ops", [])),
+        "lines_ok": want_segments <= segments,
+        "images_ok": all(f"images/{i}.png" in spec["markdown"] for i in expected.get("images", [])),
+        "forbidden": [w for w in expected.get("must_not", []) if w in words],
+    }
+
+
 def _spec_md(client: httpx.Client, base: str, conversation: str) -> str:
     md = client.get(f"{base}/conversations/{conversation}/spec.md")
     md.raise_for_status()
@@ -195,7 +298,10 @@ def _feedback_count(client: httpx.Client, base: str, conversation: str) -> int:
 def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict:
     """Upload the sketch into a new conversation and score the spec. An item with a base page in
     eval/specs/ is an annotation: the base page is uploaded and translated first (spec v1), then
-    the annotated page follows with meta.annotates over the whole of spec v1."""
+    the annotated page follows with meta.annotates over the whole of spec v1. A notebook item
+    (eval/layouts/<item>.json) uploads its layout and strokes; with a base it first uploads the
+    base page (its own layout) for spec v1, then the page on base_version v1 with the layout's
+    line ids and quotes rebased onto that version, and adds the notebook checks."""
     png = (ROOT / "eval" / "sketches" / f"{name}.png").read_bytes()
     base_page = ROOT / "eval" / "specs" / f"{name}.png"
     expected = json.loads((ROOT / "eval" / "expected" / f"{name}.json").read_text())
@@ -211,7 +317,28 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
     conversation = None
     try:
         runs = 1
-        if base_page.exists():
+        notebook = (EVAL / "layouts" / f"{name}.json").exists()
+        base_md = EVAL / "specs" / f"{name}.md"
+        if notebook and base_md.exists():
+            conversation = _notebook_upload(client, base, name, ".base", conversation="new")
+            status = _wait_done(client, base, conversation, timeout)
+            if status != "done":
+                result["status"] = status
+                return result
+            v1 = _spec_json(client, base, conversation)
+            layout = json.loads((EVAL / "layouts" / f"{name}.json").read_text())
+            _notebook_upload(
+                client,
+                base,
+                name,
+                conversation_id=conversation,
+                base_version=v1["version"],
+                layout=rebase_layout(layout, base_md.read_text(), v1),
+            )
+            runs = 2
+        elif notebook:
+            conversation = _notebook_upload(client, base, name, conversation="new")
+        elif base_page.exists():
             conversation = _upload(client, base, base_page.read_bytes(), conversation="new")
             status = _wait_done(client, base, conversation, timeout)
             if status != "done":
@@ -248,6 +375,8 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
                 kept=round(sc.kept, 3),
                 lost=sc.lost,
             )
+            if notebook:
+                result.update(notebook_checks(_spec_json(client, base, conversation), expected))
     except httpx.HTTPError as exc:
         result["error"] = type(exc).__name__
     finally:

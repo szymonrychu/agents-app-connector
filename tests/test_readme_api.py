@@ -30,9 +30,9 @@ def readme_routes() -> set[str]:
 
 def test_readme_lists_every_route():
     expected = {k for k in route_keys() if " /app/" in k}
-    # 17 earlier routes, 8 task relay routes, the task stream, the code route, the exchange
-    # and the feedback route
-    assert len(expected) == 29
+    # 17 earlier routes, 8 task relay routes, the task stream, the code route, the exchange,
+    # the feedback route, the spec images route and the revert route
+    assert len(expected) == 31
     assert expected - readme_routes() == set(), "undocumented routes"
     assert readme_routes() - expected == set(), "README documents routes the app lacks"
 
@@ -73,3 +73,20 @@ def test_readme_documents_annotates():
     body = upload.group(1)
     for word in ("annotates", "spec_version", "doc_page", "lines", "`no_spec`"):
         assert word in body, word
+
+
+def test_readme_documents_notebook_layouts():
+    api = section("API")
+    for word in (
+        "layout.<i>.json",
+        "region.<i>.<k>.png",
+        "base_version",
+        "`stale_base`",
+        "`stale_target`",
+        "`op_replayed`",
+        "`busy`",
+        "/revert`",
+        "/images/{region_id}.png`",
+    ):
+        assert word in api, word
+    assert "`layout_incomplete`" in section("Translator tools")

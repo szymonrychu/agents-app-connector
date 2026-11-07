@@ -106,6 +106,7 @@ class SketchMeta(BaseModel):
     caption: str | None = Field(default=None, max_length=500)
     pages: list[PageMeta] = Field(min_length=1)
     annotates: Annotates | None = None
+    base_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _consistent(self):
@@ -120,6 +121,11 @@ class SketchMeta(BaseModel):
             annotated = [p.page for p in self.annotates.pages]
             if len(set(annotated)) != len(annotated) or not set(annotated) <= indices:
                 raise ValueError("annotates.pages must be unique indices of meta.pages")
+        if self.base_version is not None:
+            if self.conversation_id is None:
+                raise ValueError("base_version requires conversation_id")
+            if self.annotates is not None:
+                raise ValueError("base_version cannot be combined with annotates")
         return self
 
 
@@ -128,3 +134,11 @@ class MessageIn(BaseModel):
 
     client_id: uuid.UUID
     text: str = Field(min_length=1)
+
+
+class RevertIn(BaseModel):
+    """Body of a revert: the latest spec version the app shows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_version: int = Field(ge=1)

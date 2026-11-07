@@ -29,8 +29,8 @@ def tracker(orchestrator, pool, settings, clock):
 
 
 @pytest.fixture
-def tools(pool, settings):
-    return TranslatorTools(pool, settings)
+def tools(pool, settings, store):
+    return TranslatorTools(pool, settings, store)
 
 
 def session_of(fake, mid):

@@ -199,3 +199,13 @@ async def sketch_ids_upto(conn: psycopg.AsyncConnection, row: InboundRow) -> lis
         (row.conversation_id, row.created_at, row.id),
     )
     return [r[0] for r in await cur.fetchall()]
+
+
+async def has_open(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> bool:
+    """Whether a row of the conversation is queued or in progress."""
+    cur = await conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM inbound WHERE conversation_id = %s "
+        "AND status IN ('queued', 'in-progress'))",
+        (conversation_id,),
+    )
+    return bool((await cur.fetchone())[0])

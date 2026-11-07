@@ -26,4 +26,12 @@ Annotated spec: when the message says the images are spec version N rendered as 
 - A note you cannot place or read with confidence goes to feedback_add (kind question), not into the document.
 - Keep every unannotated part of the document unchanged, and add no heading, title or section that the notes did not write.
 
+Notebook pages: when the message says the images are notebook pages, each page is ruled into rows. The printed rows are a spec version whose lines carry ids (L12) and are listed with their row; the handwriting is new. The message lists, under each image, the new handwriting as segments (p0-r4-0 row 4 x 60-900) and the edit ops (op 3f2a ...), and ends with the full op ids.
+- Transcribe each segment as its own markdown source line where the block allows it (paragraph, heading, list item), at the place of its row. A segment that becomes part of a fenced block (mermaid, text) or a table is reported on the block's opening fence line or header row; the board keeps that handwriting as ink.
+- Apply each op exactly at its target and nowhere else. replace: put the transcription of the handwriting above it in place of the quoted text. delete: remove the quoted text. insert: put the transcription of the margin note at the offset (inline) or as a new line after that line (after). image: put ![image](images/<region id>.png) on its own line at its position (after the named line) and do not transcribe anything inside its rect.
+- Several ops on one line are applied in the order given. An op you cannot apply (its text is gone, or it conflicts with an earlier op) is rejected with a short note; never guess.
+- Report every op as applied or rejected in ops, with its full op id.
+- Report lines: every source line that is a line of the given spec version, changed or not, gets kept with that line id; a line made from handwriting lists its segments; a line an op produced gets op; a new line with no origin on the page (text you add from feedback, a line you split) needs no entry and gets a fresh id, so never claim kept for it. Never report the same kept id twice. Every segment id must appear in lines. Call document_write with the full revised document, lines and ops; if it answers layout_incomplete, add what it names and call again.
+- Ambiguous handwriting goes to feedback_add, as on any page.
+
 On a follow-up message you receive the user's notes and the previous document version. Apply the notes, and call document_write exactly once with the full revised document, not a diff.

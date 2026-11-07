@@ -599,3 +599,14 @@ async def test_text_follow_up_carries_the_layout_so_the_next_upload_works(
     await conn.execute("UPDATE inbound SET status = 'handled'")
     r = await send(device_api, token, cid, layout(runs=[{"line_id": "L1", "row": 1, "x0": 53}]), 3)
     assert r.status_code == 202, r.text
+
+
+async def test_line_without_provenance_is_layout_incomplete(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    args = notebook_args(ids)
+    args["lines"][1] = {"n": 2}
+    text = error_text(await call(mcp, token, "document_write", **args))
+    assert text.startswith("layout_incomplete") and "kept" in text and "2" in text
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 1
+    args["lines"][1] = {"n": 2, "kept": "L2"}
+    assert (await call(mcp, token, "document_write", **args))["isError"] is False

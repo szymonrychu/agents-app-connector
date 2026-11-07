@@ -346,6 +346,18 @@ def _spec_layout(
     if absent:
         raise ToolError(f"{LAYOUT_INCOMPLETE}: missing {', '.join(absent)}")
     base_layout = None if base is None else SpecLayout.model_validate(base)
+    if base_layout is not None:
+        traced = {p.n for p in provenance if p.kept is not None or p.segments or p.op is not None}
+        loose = [
+            n
+            for n, text in enumerate(markdown.splitlines(), start=1)
+            if text.strip() and n not in traced
+        ]
+        if loose:
+            raise ToolError(
+                f"{LAYOUT_INCOMPLETE}: lines {', '.join(map(str, loose))} have no kept, "
+                "segments or op; report kept for every line carried over from the base"
+            )
     try:
         assigned = assign(markdown, provenance, base_layout, next_number)
     except LineIdError as exc:

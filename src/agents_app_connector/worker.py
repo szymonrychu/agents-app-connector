@@ -54,8 +54,15 @@ from agents_app_connector.db import (
 )
 from agents_app_connector.db.inbound import InboundRow
 from agents_app_connector.handoff import Handoffs
-from agents_app_connector.plugins import REGISTRY, AnnotatedPage, TurnFile, TurnInput
+from agents_app_connector.plugins import (
+    REGISTRY,
+    AnnotatedPage,
+    NotebookPage,
+    TurnFile,
+    TurnInput,
+)
 from agents_app_connector.plugins.sketch import MISSING_FILE
+from agents_app_connector.plugins.sketch.layout import PageLayout, SpecLayout
 from agents_app_connector.run_store import AppRunStore, status_event
 from agents_app_connector.settings import Settings
 from agents_app_connector.storage import AttachmentStore
@@ -306,6 +313,8 @@ class Worker:
                 continue
             files.append(TurnFile(att.id, att.kind, att.path, att.mime, data, att.page))
         annotated_spec, annotated_pages = await self._annotation(row)
+        layouts = _notebook_pages(row, files) if source is row else []
+        base = await self._base(row) if layouts else None
         plugin = REGISTRY[conv.plugin]
         turn = TurnInput(
             kind=row.kind,  # type: ignore[arg-type]
@@ -318,6 +327,8 @@ class Worker:
             previous_spec=previous,
             annotated_spec=annotated_spec,
             annotated_pages=annotated_pages,
+            layouts=layouts,
+            base=base,
         )
         text = plugin.render_prompt(turn)
         if missing and MISSING_FILE not in text:
@@ -341,8 +352,31 @@ class Worker:
         ]
         return (spec.version, spec.markdown), pages
 
+    async def _base(self, row: InboundRow) -> tuple[int, str, SpecLayout] | None:
+        """The spec version a notebook upload's board showed (meta.base_version), on every
+        turn like an annotation's spec vN; None without one or when it vanished."""
+        version = row.meta.get("base_version")
+        if version is None:
+            return None
+        async with self._pool.connection() as conn:
+            spec = await specs.get(conn, row.conversation_id, version)
+        if spec is None:
+            return None
+        layout = SpecLayout.model_validate(spec.layout or {"lines": []})
+        return spec.version, spec.markdown, layout
+
     def _read(self, path: str) -> bytes | None:
         try:
             return self._files.read(path)
         except OSError:
             return None
+
+
+def _notebook_pages(row: InboundRow, files: list[TurnFile]) -> list[NotebookPage]:
+    """The page layouts of a notebook upload (validated at upload) with each canvas width."""
+    widths = {p["page"]: p["canvas"]["w"] for p in row.meta.get("pages", [])}
+    return [
+        NotebookPage(f.page or 0, PageLayout.model_validate_json(f.data), widths[f.page or 0])
+        for f in files
+        if f.kind == "sketch_layout"
+    ]

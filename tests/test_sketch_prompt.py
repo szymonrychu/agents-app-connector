@@ -1,9 +1,10 @@
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from test_plugins import make_turn
 
-from agents_app_connector.plugins import TurnFile
-from agents_app_connector.plugins.sketch import PLUGIN
+from agents_app_connector.plugins import NotebookPage, TurnFile
+from agents_app_connector.plugins.sketch import MARGIN_INK, PLUGIN
+from agents_app_connector.plugins.sketch.layout import PageLayout, SpecLayout
 
 FINAL = (
     "Write the document with document_write and anything else with feedback_add. "
@@ -212,3 +213,168 @@ def test_prompt_is_second_person_and_keeps_feedback_for_the_tool():
     assert "the user's feedback" not in text
     assert "the user's notes" in text
     assert "You recreate" in text
+
+
+# notebook pages
+
+OP_IDS = [
+    UUID("3f2a0000-0000-4000-8000-000000000001"),
+    UUID("9c1d0000-0000-4000-8000-000000000002"),
+    UUID("7b7b0000-0000-4000-8000-000000000003"),
+    UUID("a1a10000-0000-4000-8000-000000000004"),
+]
+REGION = UUID("5e5e0000-0000-4000-8000-000000000005")
+NB_LAYOUT = PageLayout.model_validate(
+    {
+        "version": 1,
+        "geometry": {
+            "cell": 53,
+            "row_pitch": 106,
+            "top": 106,
+            "rows": 16,
+            "text_left": 53,
+            "margin_left": 983,
+        },
+        "segments": [{"id": "p0-r4-0", "row": 4, "x0": 60, "x1": 900.4, "strokes": [5]}],
+        "runs": [{"line_id": "L11", "row": 1, "x0": 53}, {"line_id": "L12", "row": 2, "x0": 53}],
+        "ops": [
+            {
+                "id": str(OP_IDS[0]),
+                "kind": "replace",
+                "target": {"line_id": "L12", "from": 4, "to": 8, "quote": "milk"},
+                "strokes": [0],
+                "rect": [200, 280, 150, 50],
+            },
+            {
+                "id": str(OP_IDS[1]),
+                "kind": "delete",
+                "target": {"line_id": "L11", "from": 0, "to": 4, "quote": "Shop"},
+                "strokes": [1],
+            },
+            {
+                "id": str(OP_IDS[2]),
+                "kind": "insert",
+                "at": {"line_id": "L12", "offset": 8, "mode": "inline"},
+                "strokes": [2, 3],
+                "rect": [990, 300, 300, 90.6],
+            },
+            {
+                "id": str(OP_IDS[3]),
+                "kind": "image",
+                "strokes": [4],
+                "rect": [60, 600, 400, 300],
+                "region": {"id": str(REGION), "part": "region.0.0.png", "after_line": "L11"},
+            },
+        ],
+    }
+)
+BASE_MD = "Shop list\nbuy milk\n"
+BASE_SPEC = (
+    3,
+    BASE_MD,
+    SpecLayout.model_validate(
+        {"lines": [{"line_id": "L11", "source_line": 1}, {"line_id": "L12", "source_line": 2}]}
+    ),
+)
+
+
+def _notebook_turn(**kw):
+    files = _page_files(0)
+    base = {
+        "files": files,
+        "caption": None,
+        "layouts": [NotebookPage(0, NB_LAYOUT, 1404)],
+        "base": BASE_SPEC,
+        "previous_spec": (3, BASE_MD),
+    }
+    return make_turn(**{**base, **kw})
+
+
+def test_notebook_prompt_snapshot():
+    t = _notebook_turn()
+    aid = t.files[0].attachment_id
+    assert PLUGIN.render_prompt(t) == (
+        f"Image 1: sketch-{aid}.png (page 0)\n"
+        "Notebook geometry: cell 53, rows 16 from y 106, pitch 106, text x 53-983, "
+        "margin x 983-1404\n"
+        'L11 row 1: "Shop list"\n'
+        'L12 row 2: "buy milk"\n'
+        "p0-r4-0 row 4 x 60-900\n"
+        'op 3f2a replace L12[4:8] "milk" with the handwriting above it (rect 200,280,150,50)\n'
+        'op 9c1d delete L11[0:4] "Shop"\n'
+        "op 7b7b insert at L12 offset 8 inline from the margin note (rect 990,300,300,91)\n"
+        f"op a1a1 image region {REGION} (rect 60,600,400,300) after L11: "
+        "do not transcribe inside\n\n"
+        "These images are notebook pages. The printed rows are spec version 3 (their line ids "
+        "are given above), the handwriting is new: transcribe each segment, apply each op to "
+        "spec version 3 and call document_write with the full revised document, lines and "
+        "ops.\n\n"
+        f"{MARGIN_INK}\n\n"
+        "Spec version 3:\n```markdown\nShop list\nbuy milk\n```\n"
+        "Line ids of spec version 3:\nL11: line 1\nL12: line 2\n\n"
+        f"Op ids: 3f2a={OP_IDS[0]}, 9c1d={OP_IDS[1]}, 7b7b={OP_IDS[2]}, a1a1={OP_IDS[3]}\n\n"
+        + FINAL
+    )
+
+
+def test_notebook_prompt_insert_after_line_and_image_without_anchor():
+    raw = NB_LAYOUT.model_dump(mode="json", by_alias=True)
+    raw["ops"][2]["at"]["mode"] = "after_line"
+    raw["ops"][3]["region"]["after_line"] = None
+    t = _notebook_turn(layouts=[NotebookPage(0, PageLayout.model_validate(raw), 1404)])
+    p = PLUGIN.render_prompt(t)
+    assert "op 7b7b insert after L12 from the margin note (rect 990,300,300,91)\n" in p
+    assert f"op a1a1 image region {REGION} (rect 60,600,400,300): do not transcribe inside" in p
+
+
+def test_notebook_prompt_carries_base_in_full():
+    p = PLUGIN.render_prompt(_notebook_turn(first=False, previous_spec=None))
+    assert "Spec version 3:\n```markdown\nShop list\nbuy milk\n```" in p
+    assert "Previous spec version" not in p
+    assert "L11: line 1\nL12: line 2" in p
+
+
+def test_notebook_prompt_without_base_keeps_previous_spec():
+    raw = NB_LAYOUT.model_dump(mode="json", by_alias=True)
+    raw["ops"], raw["runs"] = [], []
+    t = _notebook_turn(layouts=[NotebookPage(0, PageLayout.model_validate(raw), 1404)], base=None)
+    p = PLUGIN.render_prompt(t)
+    assert "p0-r4-0 row 4 x 60-900" in p and "Op ids" not in p
+    assert "Previous spec version 3:" in p and "Line ids" not in p
+
+
+def test_plain_prompts_unchanged_by_notebook_support():
+    t = make_turn()
+    aid = t.files[0].attachment_id
+    p = PLUGIN.render_prompt(t)
+    assert p == f"Image 1: sketch-{aid}.png (page 0)\n\nCaption: login screen\n\n" + FINAL
+    assert "Notebook" not in p and MARGIN_INK not in p
+
+
+def test_notebook_layout_and_region_files_never_attached():
+    files = [
+        *_page_files(0),
+        TurnFile(uuid4(), "sketch_layout", "l.json", "application/json", b"{}", 0),
+        TurnFile(uuid4(), "spec_image", "r.png", "image/png", b"P", 0),
+    ]
+    names = [a.name for a in PLUGIN.turn_attachments(_notebook_turn(files=files))]
+    assert len(names) == 2 and all(n.startswith(("sketch-", "strokes-")) for n in names)
+
+
+def test_system_append_has_notebook_pages_section():
+    text = _system_append()
+    assert "Notebook pages" in text
+    section = text[text.index("Notebook pages") :]
+    for word in (
+        "segment",
+        "its own markdown source line",
+        "fenced block",
+        "kept",
+        "![image](images/<region id>.png)",
+        "do not transcribe",
+        "applied or rejected",
+        "every op",
+        "lines and ops",
+    ):
+        assert word in section, word
+    assert text.isascii()

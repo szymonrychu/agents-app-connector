@@ -12,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from agents_app_connector.api.events import EventHub
 from agents_app_connector.api.limits import RateLimiter
+from agents_app_connector.plugins.sketch.layout import PageLayout, SpecLayout
 from agents_app_connector.settings import Settings
 from agents_app_connector.taskboard_stream import TaskChangeRelay
 
@@ -48,6 +49,15 @@ class AnnotatedPage:
 
 
 @dataclass(frozen=True)
+class NotebookPage:
+    """The layout of one uploaded notebook page and its canvas width in page px."""
+
+    page: int
+    layout: PageLayout
+    width: int
+
+
+@dataclass(frozen=True)
 class TurnInput:
     kind: Literal["sketch", "message"]
     first: bool
@@ -59,6 +69,8 @@ class TurnInput:
     previous_spec: tuple[int, str] | None
     annotated_spec: tuple[int, str] | None = None
     annotated_pages: Sequence[AnnotatedPage] = ()
+    layouts: Sequence[NotebookPage] = ()
+    base: tuple[int, str, SpecLayout] | None = None
 
 
 class ClientPlugin(Protocol):

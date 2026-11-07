@@ -447,3 +447,39 @@ async def test_annotation_with_vanished_spec_falls_back_to_plain_prompt(
     await worker.tick()
     msg = only(fake.messages.values())
     assert "Spec version" not in msg["text"] and "(page 0)" in msg["text"]
+
+
+async def test_turn_input_carries_layouts_and_base(worker, fake, device_api, token, conn, pool):
+    import uuid as _uuid
+
+    from helpers import bearer, layout, region_png
+    from test_api_sketches_layout import BASE, BASE_LAYOUT, image_op, send, strike
+
+    from agents_app_connector.db import specs
+
+    cid = (await device_api.post("/conversations", headers=bearer(token))).json()["id"]
+    await specs.add(conn, _uuid.UUID(cid), BASE, None, [], None, layout=BASE_LAYOUT)
+    seg = {"id": "p0-r4-0", "row": 4, "x0": 60, "x1": 900, "strokes": [2]}
+    ops = [strike(), image_op()]
+    lay = layout(segments=[seg], runs=[{"line_id": "L1", "row": 1, "x0": 53}], ops=ops)
+    r = await send(device_api, token, cid, lay, regions={(0, 0): region_png()})
+    assert r.status_code == 202, r.text
+    await worker.tick()
+    msg = only(fake.messages.values())
+    text = msg["text"]
+    assert "Notebook geometry: cell 53, rows 16 from y 106, pitch 106" in text
+    assert "margin x 983-1404" in text
+    assert 'L1 row 1: "buy milk"' in text and "p0-r4-0 row 4 x 60-900" in text
+    assert f'op {ops[0]["id"][:4]} delete L1[4:8] "milk"' in text
+    assert "Spec version 1:\n```markdown\nbuy milk\nand bread\n```" in text
+    assert "Line ids of spec version 1:\nL1: line 1\nL2: line 2" in text
+    assert f"Op ids: {ops[0]['id'][:4]}={ops[0]['id']}" in text
+    assert len(msg["attachments"]) == 2
+    # a follow turn on the same session still carries the base and the layout
+    await finish_all(pool)
+    await conn.execute("UPDATE inbound SET status = 'handled'")
+    r = await send(device_api, token, cid, layout(ops=[strike()]))
+    assert r.status_code == 202, r.text
+    await worker.tick()
+    follow = fake.messages[max(fake.messages)]["text"]
+    assert "Line ids of spec version 1" in follow and "Notebook geometry" in follow

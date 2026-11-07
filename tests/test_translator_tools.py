@@ -601,12 +601,32 @@ async def test_text_follow_up_carries_the_layout_so_the_next_upload_works(
     assert r.status_code == 202, r.text
 
 
-async def test_line_without_provenance_is_layout_incomplete(mcp, notebook, conn):
+async def test_line_without_origin_is_accepted_with_fresh_id(mcp, notebook, conn):
+    # OQ6 (T-46): a spec line with no board origin (text added from feedback, a line split) is
+    # valid; it gets a fresh id and the app places it after the previous line's row.
     token, cid, ids = await notebook()
     args = notebook_args(ids)
     args["lines"][1] = {"n": 2}
+    result = await call(mcp, token, "document_write", **args)
+    assert result["isError"] is False, result
+    row = await specs.get(conn, uuid.UUID(cid), result["structuredContent"]["version"])
+    line = row.layout["lines"][1]
+    assert line["source_line"] == 2 and line["line_id"] not in {"L1", "L2"}
+
+
+async def test_kept_unknown_id_is_layout_invalid(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    args = notebook_args(ids)
+    args["lines"][1] = {"n": 2, "kept": "L99"}
     text = error_text(await call(mcp, token, "document_write", **args))
-    assert text.startswith("layout_incomplete") and "kept" in text and "2" in text
+    assert text.startswith("layout_invalid") and "L99" in text
     assert await specs.latest_version(conn, uuid.UUID(cid)) == 1
-    args["lines"][1] = {"n": 2, "kept": "L2"}
-    assert (await call(mcp, token, "document_write", **args))["isError"] is False
+
+
+async def test_kept_same_id_twice_is_layout_invalid(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    args = notebook_args(ids)
+    args["lines"][1] = {"n": 2, "kept": "L1"}
+    text = error_text(await call(mcp, token, "document_write", **args))
+    assert text.startswith("layout_invalid") and "L1" in text
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 1

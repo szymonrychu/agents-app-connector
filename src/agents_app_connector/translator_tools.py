@@ -35,8 +35,25 @@ from pydantic import Field, ValidationError
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 
-from agents_app_connector.db import conversations, events, feedback, inbound, runs, specs
+from agents_app_connector.db import (
+    conversations,
+    events,
+    feedback,
+    inbound,
+    runs,
+    spec_images,
+    specs,
+)
+from agents_app_connector.line_ids import LineIdError, LineProvenance, assign
+from agents_app_connector.plugins.sketch.layout import (
+    OpStatus,
+    PageLayout,
+    SpecLayout,
+    image_ids,
+    load_layouts,
+)
 from agents_app_connector.settings import Settings
+from agents_app_connector.storage import AttachmentStore
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +73,10 @@ EMPTY_TEXT = "empty_text"
 TEXT_TOO_LONG = "text_too_long"
 WHERE_TOO_LONG = "where_too_long"
 FEEDBACK_LIMIT = "feedback_limit"
+LAYOUT_INCOMPLETE = "layout_incomplete"
+LAYOUT_INVALID = "layout_invalid"
+LAYOUT_NOT_EXPECTED = "layout_not_expected"
+UNKNOWN_IMAGE = "unknown_image"
 
 DOCUMENT_WRITE = (
     "Store the document: a faithful markdown transcription of what the user wrote and drew on "
@@ -64,7 +85,19 @@ DOCUMENT_WRITE = (
     "questions, no summary, no explanations, no commentary, no notes to the user. The only "
     "additions allowed are the reading markers defined in your instructions. Each call stores a "
     "new version of the document, so call it once per turn with the complete document. "
-    "Anything you want to tell the user goes to feedback_add, never here."
+    "Anything you want to tell the user goes to feedback_add, never here. "
+    "For notebook pages also pass lines (provenance of every source line) and ops (applied or "
+    "rejected for every op id)."
+)
+LINES = (
+    "Notebook pages only: provenance of the document's source lines, one entry per line you "
+    "can trace: n (1-based source line), segments (the segment ids transcribed into it), kept "
+    "(the line id of the given spec version it keeps) and op (the op id that produced or "
+    "changed it). Every segment id of the message must appear."
+)
+OPS = (
+    "Notebook pages only: one entry per op id of the message: id (the full op id), status "
+    "applied or rejected, note (optional, why)."
 )
 FEEDBACK_ADD = (
     "Tell the user something about the sketch: a question, an uncertain or illegible reading, "
@@ -174,11 +207,20 @@ def _session_header(raw: bytes) -> uuid.UUID | None:
 class TranslatorTools:
     """The two tools' logic, bound to one session id per call."""
 
-    def __init__(self, pool: AsyncConnectionPool, settings: Settings) -> None:
+    def __init__(
+        self, pool: AsyncConnectionPool, settings: Settings, store: AttachmentStore
+    ) -> None:
         self._pool = pool
         self._settings = settings
+        self._store = store
 
-    async def write_document(self, session_id: uuid.UUID, markdown: str) -> dict:
+    async def write_document(
+        self,
+        session_id: uuid.UUID,
+        markdown: str,
+        lines: list[dict] | None = None,
+        ops: list[dict] | None = None,
+    ) -> dict:
         if not markdown.strip():
             raise ToolError(f"{EMPTY_DOCUMENT}: the document is empty")
         size = len(markdown.encode())
@@ -191,9 +233,36 @@ class TranslatorTools:
             row = None if run is None else await inbound.by_run(conn, run.id)
             if run is None or row is None:
                 raise ToolError(f"{NO_ACTIVE_TURN}: no turn of yours is running")
+            missing = await spec_images.missing(conn, run.conversation_id, image_ids(markdown))
+            if missing:
+                raise ToolError(
+                    f"{UNKNOWN_IMAGE}: no image of this conversation: "
+                    + ", ".join(sorted(str(m) for m in missing))
+                )
+            layouts = await load_layouts(conn, self._store, row.id) if row.kind == "sketch" else {}
+            if layouts:
+                base_version = row.meta.get("base_version")
+                base = (
+                    None
+                    if base_version is None
+                    else await specs.get(conn, run.conversation_id, base_version)
+                )
+                stored = _spec_layout(
+                    markdown,
+                    lines,
+                    ops,
+                    layouts,
+                    None if base is None or base.layout is None else base.layout,
+                    base_version,
+                    await specs.max_line_number(conn, run.conversation_id) + 1,
+                )
+            elif lines or ops:
+                raise ToolError(f"{LAYOUT_NOT_EXPECTED}: lines and ops are only for notebook pages")
+            else:
+                stored = None
             sketch_ids = await inbound.sketch_ids_upto(conn, row)
             version = await specs.add(
-                conn, run.conversation_id, markdown, row.id, sketch_ids, run.id
+                conn, run.conversation_id, markdown, row.id, sketch_ids, run.id, layout=stored
             )
             await events.append(conn, run.conversation_id, "spec", {"version": version})
             await conversations.touch(conn, run.conversation_id)
@@ -203,6 +272,7 @@ class TranslatorTools:
             "version": version,
             "chars": len(markdown),
             "illegible": markdown.count("[illegible]"),
+            "lines": len(markdown.splitlines()),
         }
 
     async def add_feedback(
@@ -234,6 +304,47 @@ class TranslatorTools:
         return {"stored": True, "id": item_id}
 
 
+def _spec_layout(
+    markdown: str,
+    lines: list[dict] | None,
+    ops: list[dict] | None,
+    layouts: dict[int, PageLayout],
+    base: dict | None,
+    base_version: int | None,
+    next_number: int,
+) -> dict:
+    """The stored layout of a notebook turn's version, or a tool error naming what is wrong."""
+    try:
+        provenance = [LineProvenance.model_validate(item) for item in lines or []]
+        statuses = [OpStatus.model_validate(item) for item in ops or []]
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(p) for p in first["loc"])
+        raise ToolError(f"{LAYOUT_INVALID}: {where}: {first['msg']}") from None
+    segment_ids = [s.id for lay in layouts.values() for s in lay.segments]
+    op_ids = [str(o.id) for lay in layouts.values() for o in lay.ops]
+    unknown = sorted(
+        {s for p in provenance for s in p.segments} - set(segment_ids)
+        | {str(s.id) for s in statuses} - set(op_ids)
+    )
+    if unknown:
+        raise ToolError(f"{LAYOUT_INVALID}: not in this message: {', '.join(unknown)}")
+    if len({s.id for s in statuses}) != len(statuses):
+        raise ToolError(f"{LAYOUT_INVALID}: an op id is reported twice")
+    covered = {s for p in provenance for s in p.segments} | {str(s.id) for s in statuses}
+    absent = [i for i in segment_ids + op_ids if i not in covered]
+    if absent:
+        raise ToolError(f"{LAYOUT_INCOMPLETE}: missing {', '.join(absent)}")
+    base_layout = None if base is None else SpecLayout.model_validate(base)
+    try:
+        assigned = assign(markdown, provenance, base_layout, next_number)
+    except LineIdError as exc:
+        raise ToolError(f"{LAYOUT_INVALID}: {exc}") from None
+    return SpecLayout(lines=assigned, ops=statuses, base_version=base_version).model_dump(
+        mode="json"
+    )
+
+
 def _session_id() -> uuid.UUID:
     return get_http_request().state.translator_session_id
 
@@ -246,8 +357,10 @@ def build_server(tools: TranslatorTools) -> FastMCP:
         markdown: Annotated[
             str, Field(description="The complete document, markdown, transcription only.")
         ],
+        lines: Annotated[list[dict[str, Any]] | None, Field(description=LINES)] = None,
+        ops: Annotated[list[dict[str, Any]] | None, Field(description=OPS)] = None,
     ) -> dict:
-        return await tools.write_document(_session_id(), markdown)
+        return await tools.write_document(_session_id(), markdown, lines, ops)
 
     @server.tool(name="feedback_add", description=FEEDBACK_ADD)
     async def feedback_add(
@@ -265,9 +378,11 @@ def build_server(tools: TranslatorTools) -> FastMCP:
     return server
 
 
-def build_mcp_app(pool: AsyncConnectionPool, settings: Settings, verify: Verifier):
+def build_mcp_app(
+    pool: AsyncConnectionPool, settings: Settings, verify: Verifier, store: AttachmentStore
+):
     """The ASGI app serving both tools as stateless streamable HTTP at `/mcp`."""
-    server = build_server(TranslatorTools(pool, settings))
+    server = build_server(TranslatorTools(pool, settings, store))
     return server.http_app(
         path=PATH,
         stateless_http=True,

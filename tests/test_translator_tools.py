@@ -7,7 +7,8 @@ import uuid
 import httpx
 import pytest
 from agents_common.orchestrator import OrchestratorClient
-from helpers import only, rows
+from helpers import bearer, layout, only, region_png, rows
+from test_api_sketches_layout import BASE, BASE_LAYOUT, image_op, send, strike
 
 from agents_app_connector.db import specs
 from agents_app_connector.translator_tools import (
@@ -58,8 +59,8 @@ class McpClient:
 
 
 @pytest.fixture
-def mcp(pool, settings, sessions):
-    return McpClient(build_mcp_app(pool, settings, sessions.verify), sessions)
+def mcp(pool, settings, sessions, store):
+    return McpClient(build_mcp_app(pool, settings, sessions.verify, store), sessions)
 
 
 NO_HEADER = object()
@@ -293,7 +294,8 @@ async def test_lists_exactly_the_two_tools_with_the_contract(mcp, sessions):
     assert set(tools) == {"document_write", "feedback_add"}
     doc = tools["document_write"]
     assert doc["inputSchema"]["required"] == ["markdown"]
-    assert set(doc["inputSchema"]["properties"]) == {"markdown"}
+    assert set(doc["inputSchema"]["properties"]) == {"markdown", "lines", "ops"}
+    assert "For notebook pages also pass lines" in doc["description"]
     for word in ("faithful", "nothing else", "front matter", "Requirements", "Open questions"):
         assert word in doc["description"], word
     assert "feedback_add" in doc["description"]
@@ -328,6 +330,7 @@ async def test_document_write_stores_next_version_with_run_and_event(mcp, transl
         "version": 1,
         "chars": 18,
         "illegible": 1,
+        "lines": 3,
     }
     async with pool.connection() as c:
         spec = await specs.get(c, conv, 1)
@@ -418,10 +421,13 @@ async def test_feedback_add_validation(mcp, translator, conn):
     assert await rows(conn, "SELECT 1 FROM feedback") == []
 
 
-async def test_feedback_cap_per_run(pool, settings, sessions, translator, conn):
+async def test_feedback_cap_per_run(pool, settings, sessions, translator, conn, store):
     c = McpClient(
         build_mcp_app(
-            pool, settings.model_copy(update={"max_feedback_per_run": 2}), sessions.verify
+            pool,
+            settings.model_copy(update={"max_feedback_per_run": 2}),
+            sessions.verify,
+            store,
         ),
         sessions,
     )
@@ -432,3 +438,137 @@ async def test_feedback_cap_per_run(pool, settings, sessions, translator, conn):
         "feedback_limit"
     )
     assert len(await rows(conn, "SELECT 1 FROM feedback")) == 2
+
+
+# notebook turns
+
+
+@pytest.fixture
+def notebook(worker, fake, sessions, device_api, token, conn):
+    """A conversation with base v1 (BASE, L1 and L2) and a notebook turn running on it, whose
+    layout has one segment, a strike on L1 and an image op. Returns (token, cid, ids)."""
+
+    async def go():
+        r = await device_api.post("/conversations", headers=bearer(token))
+        cid = r.json()["id"]
+        await specs.add(conn, uuid.UUID(cid), BASE, None, [], None, layout=BASE_LAYOUT)
+        region_id = uuid.uuid4()
+        ops = [strike(), image_op(region_id=region_id)]
+        seg = {"id": "p0-r4-0", "row": 4, "x0": 60, "x1": 900, "strokes": [2]}
+        lay = layout(segments=[seg], runs=[{"line_id": "L1", "row": 1, "x0": 53}], ops=ops)
+        r = await send(device_api, token, cid, lay, regions={(0, 0): region_png()})
+        assert r.status_code == 202, r.text
+        await worker.tick()
+        session_id = uuid.UUID(fake.messages[max(fake.messages)]["session_id"])
+        tok = f"tok-{len(sessions.tokens)}"
+        sessions.tokens[tok] = session_id
+        return tok, cid, {"ops": [o["id"] for o in ops], "region": str(region_id)}
+
+    return go
+
+
+def notebook_doc(region):
+    return f"buy\nand bread\nnew line\n![image](images/{region}.png)\n"
+
+
+def notebook_args(ids, **over):
+    args = {
+        "markdown": notebook_doc(ids["region"]),
+        "lines": [
+            {"n": 1, "kept": "L1", "op": ids["ops"][0]},
+            {"n": 2, "kept": "L2"},
+            {"n": 3, "segments": ["p0-r4-0"]},
+            {"n": 4, "op": ids["ops"][1]},
+        ],
+        "ops": [
+            {"id": ids["ops"][0], "status": "applied"},
+            {"id": ids["ops"][1], "status": "applied", "note": "placed after L2"},
+        ],
+    }
+    return {**args, **over}
+
+
+async def test_notebook_turn_stores_layout_with_line_ids(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    await specs.add(
+        conn, uuid.UUID(cid), "x", None, [], None, layout={"lines": [{"line_id": "L40"}]}
+    )
+    result = await call(mcp, token, "document_write", **notebook_args(ids))
+    assert result["isError"] is False, result
+    assert result["structuredContent"]["lines"] == 4
+    row = await specs.get(conn, uuid.UUID(cid), result["structuredContent"]["version"])
+    assert row.layout == {
+        "lines": [
+            {"line_id": "L1", "source_line": 1, "origin": {"kept": "L1", "op": ids["ops"][0]}},
+            {"line_id": "L2", "source_line": 2, "origin": {"kept": "L2"}},
+            {"line_id": "L41", "source_line": 3, "origin": {"segments": ["p0-r4-0"]}},
+            {"line_id": "L42", "source_line": 4, "origin": {"op": ids["ops"][1]}},
+        ],
+        "ops": [
+            {"id": ids["ops"][0], "status": "applied", "note": None},
+            {"id": ids["ops"][1], "status": "applied", "note": "placed after L2"},
+        ],
+        "base_version": 1,
+        "reverted_from": None,
+    }
+
+
+async def test_notebook_turn_without_lines_is_layout_incomplete(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    result = await call(mcp, token, "document_write", markdown=notebook_doc(ids["region"]))
+    text = error_text(result)
+    assert text.startswith("layout_incomplete")
+    for item in ("p0-r4-0", *ids["ops"]):
+        assert item in text, item
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 1
+
+
+async def test_missing_op_status_is_layout_incomplete(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    args = notebook_args(ids, ops=[{"id": ids["ops"][0], "status": "rejected", "note": "x"}])
+    text = error_text(await call(mcp, token, "document_write", **args))
+    assert text.startswith("layout_incomplete") and ids["ops"][1] in text
+    assert ids["ops"][0] not in text
+    args = notebook_args(ids)
+    args["lines"][2] = {"n": 3}
+    text = error_text(await call(mcp, token, "document_write", **args))
+    assert text.startswith("layout_incomplete") and "p0-r4-0" in text
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 1
+
+
+async def test_notebook_turn_bad_lines_are_layout_invalid(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    cases = [
+        notebook_args(ids, lines=[*notebook_args(ids)["lines"], {"n": 9}]),
+        notebook_args(ids, lines=[{"n": 1, "kept": "L9"}, *notebook_args(ids)["lines"][1:]]),
+        notebook_args(
+            ids, ops=[*notebook_args(ids)["ops"], {"id": str(uuid.uuid4()), "status": "applied"}]
+        ),
+        notebook_args(ids, ops=[{"id": ids["ops"][0], "status": "done"}]),
+    ]
+    for args in cases:
+        text = error_text(await call(mcp, token, "document_write", **args))
+        assert text.startswith("layout_invalid"), text
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 1
+
+
+async def test_unknown_image_reference(mcp, notebook, conn):
+    token, cid, ids = await notebook()
+    other = str(uuid.uuid4())
+    args = notebook_args(ids, markdown=notebook_doc(ids["region"]) + f"![x](images/{other}.png)\n")
+    args["lines"].append({"n": 5})
+    text = error_text(await call(mcp, token, "document_write", **args))
+    assert text.startswith("unknown_image") and other in text
+    assert ids["region"] not in text
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 1
+
+
+async def test_plain_turn_rejects_lines_and_ops(mcp, translator, conn):
+    token, conv, _ = await translator()
+    for extra in ({"lines": [{"n": 1}]}, {"ops": [{"id": str(uuid.uuid4()), "status": "applied"}]}):
+        result = await call(mcp, token, "document_write", markdown="a", **extra)
+        assert error_text(result).startswith("layout_not_expected")
+    result = await call(mcp, token, "document_write", markdown="a\nb", lines=[], ops=[])
+    assert result["isError"] is False and result["structuredContent"]["lines"] == 2
+    row = await specs.latest(conn, uuid.UUID(conv))
+    assert row.layout is None

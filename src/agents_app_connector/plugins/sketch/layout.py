@@ -7,14 +7,19 @@ the provenance of every source line and the status of every op; the connector st
 the version's `SpecLayout` with connector-assigned line ids (`line_ids.assign`).
 """
 
+import asyncio
+import re
 import uuid
 from collections.abc import Iterable
 from typing import Literal
 
+import psycopg
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agents_app_connector.api.errors import ApiError
 from agents_app_connector.api.schemas import Canvas
+from agents_app_connector.db import attachments
+from agents_app_connector.storage import AttachmentStore
 
 LINE_ID = r"^L[0-9]+$"
 SEGMENT_ID = r"^p[0-9]+-r[0-9]+-[0-9]+$"
@@ -238,3 +243,35 @@ def check_base(layouts: dict[int, PageLayout], base_markdown: str, base: SpecLay
                     "stale_target",
                     f"op {op.id}: {t.line_id}[{t.from_}:{t.to}] no longer reads {t.quote!r}",
                 )
+
+
+IMAGE_REF = re.compile(r"!\[[^\]]*\]\(images/([0-9a-f-]{36})\.png\)")
+
+
+def image_ids(markdown: str) -> list[uuid.UUID]:
+    """Region ids of the `![..](images/<id>.png)` references, first-seen order, unique."""
+    out: list[uuid.UUID] = []
+    for raw in IMAGE_REF.findall(markdown):
+        try:
+            item = uuid.UUID(raw)
+        except ValueError:
+            continue
+        if item not in out:
+            out.append(item)
+    return out
+
+
+async def load_layouts(
+    conn: psycopg.AsyncConnection, store: AttachmentStore, inbound_id: uuid.UUID
+) -> dict[int, PageLayout]:
+    """The page layouts of an upload by page (validated at upload); unreadable ones left out."""
+    out: dict[int, PageLayout] = {}
+    for att in await attachments.for_inbound(conn, inbound_id):
+        if att.kind != "sketch_layout" or att.purged_at is not None:
+            continue
+        try:
+            raw = await asyncio.to_thread(store.read, att.path)
+        except OSError:
+            continue
+        out[att.page or 0] = PageLayout.model_validate_json(raw)
+    return out

@@ -124,7 +124,9 @@ async def test_upload_to_spec_to_feedback_to_handoff(
         async def verify(bearer_token, session_id):
             return sessions.get(bearer_token) == session_id
 
-        translator = FakeTranslator(build_mcp_app(pool, s, verify), agent_token, session["id"])
+        translator = FakeTranslator(
+            build_mcp_app(pool, s, verify, store), agent_token, session["id"]
+        )
         assert (await translator.call("document_write", markdown=SPEC_V1))["version"] == 1
         await translator.call("feedback_add", kind="question", text="Is A a button?", where="p1")
         fake.complete_turn(first, REPLY)

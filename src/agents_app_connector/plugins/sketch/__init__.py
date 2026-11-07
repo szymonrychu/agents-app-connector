@@ -19,8 +19,7 @@ FINAL_LINE = (
     "Your reply text is discarded."
 )
 MISSING_FILE = "(sketch file no longer stored)"
-# T-46 OQ3 pending: margin ink that is not part of an insert op is forwarded as ordinary ink
-# (Recommended). Another answer changes only this paragraph.
+# T-46 OQ3: non-insert margin ink is forwarded to the translator as ordinary ink.
 MARGIN_INK = (
     "Ink in the right margin that no op names is a note on the printed rows: apply it under "
     "the annotated-spec rule of your instructions (the nearest lines), or ask with feedback_add "

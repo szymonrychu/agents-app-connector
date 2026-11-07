@@ -46,9 +46,8 @@ SESSION_GONE = "session_gone"
 NO_PRESET = "no_preset"
 NO_SPEC = "no_spec"
 USAGE_QUOTA = "usage_quota"
-# T-46 OQ5 pending: a spec with more images than one message carries attaches the first ones in
-# document order and lists the rest by name (Recommended). Another answer changes only this
-# constant and split_images.
+# T-46 OQ5: a spec with more images than one message carries attaches the first ones in
+# document order and lists the rest by name.
 HANDOFF_MAX_IMAGES = ORCHESTRATOR_ATTACHMENTS_MAX_COUNT
 
 
@@ -58,8 +57,10 @@ def split_images(
     max_count: int = HANDOFF_MAX_IMAGES,
     max_bytes: int = ORCHESTRATOR_ATTACHMENTS_MAX_TOTAL_BYTES,
 ) -> tuple[list[tuple[uuid.UUID, bytes]], list[uuid.UUID]]:
-    """T-46 OQ5 pending: the images to attach, in order, within the message's count and byte
-    caps, and the ids of the ones left to list by name."""
+    """Attach the images in order within the message's count and byte caps.
+
+    Returns the attached pairs and the ids of the rest, which are listed by name.
+    """
     attached: list[tuple[uuid.UUID, bytes]] = []
     listed: list[uuid.UUID] = []
     total = 0

@@ -135,6 +135,101 @@
         "title": "DeviceOut",
         "type": "object"
       },
+      "EditOp": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpAt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "replace",
+              "delete",
+              "insert",
+              "image"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rect"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Region"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "strokes": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Strokes",
+            "type": "array"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "EditOp",
+        "type": "object"
+      },
       "ErrorResponse": {
         "properties": {
           "detail": {
@@ -256,6 +351,52 @@
         "title": "Feedback",
         "type": "object"
       },
+      "Geometry": {
+        "additionalProperties": false,
+        "description": "Notebook grid of the page in page-canvas px.",
+        "properties": {
+          "cell": {
+            "exclusiveMinimum": 0,
+            "title": "Cell",
+            "type": "integer"
+          },
+          "margin_left": {
+            "minimum": 0,
+            "title": "Margin Left",
+            "type": "integer"
+          },
+          "row_pitch": {
+            "exclusiveMinimum": 0,
+            "title": "Row Pitch",
+            "type": "integer"
+          },
+          "rows": {
+            "exclusiveMinimum": 0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "text_left": {
+            "minimum": 0,
+            "title": "Text Left",
+            "type": "integer"
+          },
+          "top": {
+            "minimum": 0,
+            "title": "Top",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cell",
+          "row_pitch",
+          "top",
+          "rows",
+          "text_left",
+          "margin_left"
+        ],
+        "title": "Geometry",
+        "type": "object"
+      },
       "HandoffIn": {
         "additionalProperties": false,
         "properties": {
@@ -302,6 +443,148 @@
           "text"
         ],
         "title": "MessageIn",
+        "type": "object"
+      },
+      "OpAt": {
+        "additionalProperties": false,
+        "properties": {
+          "line_id": {
+            "pattern": "^L[0-9]+$",
+            "title": "Line Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "inline",
+              "after_line"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "offset": {
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line_id",
+          "offset",
+          "mode"
+        ],
+        "title": "OpAt",
+        "type": "object"
+      },
+      "OpStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "OpStatus",
+        "type": "object"
+      },
+      "OpTarget": {
+        "additionalProperties": false,
+        "description": "Char offsets `[from, to)` in the markdown source line of `line_id` and the text there.",
+        "properties": {
+          "from": {
+            "minimum": 0,
+            "title": "From",
+            "type": "integer"
+          },
+          "line_id": {
+            "pattern": "^L[0-9]+$",
+            "title": "Line Id",
+            "type": "string"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "to": {
+            "minimum": 0,
+            "title": "To",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line_id",
+          "from",
+          "to",
+          "quote"
+        ],
+        "title": "OpTarget",
+        "type": "object"
+      },
+      "PageLayout": {
+        "additionalProperties": false,
+        "properties": {
+          "geometry": {
+            "$ref": "#/components/schemas/Geometry"
+          },
+          "ops": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EditOp"
+            },
+            "title": "Ops",
+            "type": "array"
+          },
+          "runs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/VisibleRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "segments": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Segment"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "geometry"
+        ],
+        "title": "PageLayout",
         "type": "object"
       },
       "PairRequest": {
@@ -379,10 +662,94 @@
         "title": "PresetTarget",
         "type": "object"
       },
+      "Region": {
+        "additionalProperties": false,
+        "properties": {
+          "after_line": {
+            "anyOf": [
+              {
+                "pattern": "^L[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After Line"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "part": {
+            "pattern": "^region\\.[0-9]+\\.[0-9]+\\.png$",
+            "title": "Part",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "part"
+        ],
+        "title": "Region",
+        "type": "object"
+      },
+      "Segment": {
+        "additionalProperties": false,
+        "description": "New handwriting of one row, split at gaps wider than two cells.",
+        "properties": {
+          "id": {
+            "pattern": "^p[0-9]+-r[0-9]+-[0-9]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "row": {
+            "minimum": 0,
+            "title": "Row",
+            "type": "integer"
+          },
+          "strokes": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Strokes",
+            "type": "array"
+          },
+          "x0": {
+            "title": "X0",
+            "type": "number"
+          },
+          "x1": {
+            "title": "X1",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "row",
+          "x0",
+          "x1",
+          "strokes"
+        ],
+        "title": "Segment",
+        "type": "object"
+      },
       "SketchUpload": {
         "properties": {
+          "layout.0.json": {
+            "description": "optional notebook layout.<i>.json of pages[i] (JSON PageLayout, at most APPCONN_MAX_LAYOUT_BYTES). Stroke indices refer to strokes.<i>.json (no strokes part means no indices), rects and segments lie inside the canvas, op ids are unique uuids never reported before (409 op_replayed), line ids exist in base_version and each target quote equals the source text at [from, to) (422 stale_target).",
+            "format": "binary",
+            "type": "string"
+          },
           "meta": {
-            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}}], \"annotates\"?: {\"spec_version\": int >= 1, \"pages\": [{\"page\": int, \"doc_page\": int, \"lines\": [int, int]}]}}. annotates needs conversation_id and answers 404 no_spec when that spec version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png.",
+            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}}], \"annotates\"?: {\"spec_version\": int >= 1, \"pages\": [{\"page\": int, \"doc_page\": int, \"lines\": [int, int]}]}}. annotates needs conversation_id and answers 404 no_spec when that spec version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png. \"base_version\"?: int >= 1 is the spec version whose text the board showed; it needs conversation_id, excludes annotates, is required when any layout carries ops, and answers 409 stale_base when it is not the latest version.",
+            "type": "string"
+          },
+          "region.0.0.png": {
+            "description": "region.<i>.<k>.png: the PNG an image op of pages[i] names in region.part (k < APPCONN_MAX_REGIONS_PER_PAGE). Every region part must be referenced and every referenced part present. Stored for the conversation's lifetime and served by the images route; counts toward the upload size and the device quota.",
+            "format": "binary",
             "type": "string"
           },
           "sketch.0.png": {
@@ -402,10 +769,21 @@
         "type": "object"
       },
       "Spec": {
+        "description": "layout is null for versions not written from notebook pages; otherwise it maps every markdown source line to its stable line id and lists the op statuses.",
         "properties": {
           "created": {
             "format": "date-time",
             "type": "string"
+          },
+          "layout": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpecLayout"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "markdown": {
             "type": "string"
@@ -425,9 +803,94 @@
           "version",
           "markdown",
           "created",
-          "sketch_ids"
+          "sketch_ids",
+          "layout"
         ],
         "title": "Spec",
+        "type": "object"
+      },
+      "SpecLayout": {
+        "additionalProperties": false,
+        "properties": {
+          "base_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Version"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/SpecLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "ops": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OpStatus"
+            },
+            "title": "Ops",
+            "type": "array"
+          },
+          "reverted_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reverted From"
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "title": "SpecLayout",
+        "type": "object"
+      },
+      "SpecLine": {
+        "additionalProperties": false,
+        "description": "One markdown source line (1-based) of a stored version and its stable id.",
+        "properties": {
+          "line_id": {
+            "pattern": "^L[0-9]+$",
+            "title": "Line Id",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Origin"
+          },
+          "source_line": {
+            "minimum": 1,
+            "title": "Source Line",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line_id",
+          "source_line"
+        ],
+        "title": "SpecLine",
         "type": "object"
       },
       "TaskboardError": {
@@ -453,6 +916,33 @@
           "error"
         ],
         "title": "TaskboardError",
+        "type": "object"
+      },
+      "VisibleRun": {
+        "additionalProperties": false,
+        "description": "A rendered spec line as the board showed it.",
+        "properties": {
+          "line_id": {
+            "pattern": "^L[0-9]+$",
+            "title": "Line Id",
+            "type": "string"
+          },
+          "row": {
+            "minimum": 0,
+            "title": "Row",
+            "type": "integer"
+          },
+          "x0": {
+            "title": "X0",
+            "type": "number"
+          }
+        },
+        "required": [
+          "line_id",
+          "row",
+          "x0"
+        ],
+        "title": "VisibleRun",
         "type": "object"
       }
     },
@@ -542,7 +1032,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -605,7 +1095,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           }
         },
         "summary": "Revoke a device"
@@ -666,7 +1156,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), the device is already paired (already_paired), base_version is not the latest spec version (stale_base), an op id was already reported by an earlier version (op_replayed), or a translator turn of the conversation is open (busy)"
           },
           "422": {
             "content": {
@@ -676,7 +1166,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1101,7 +1591,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1198,7 +1688,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1292,7 +1782,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), the device is already paired (already_paired), base_version is not the latest spec version (stale_base), an op id was already reported by an earlier version (op_replayed), or a translator turn of the conversation is open (busy)"
           },
           "422": {
             "content": {
@@ -1302,7 +1792,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1413,7 +1903,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), the device is already paired (already_paired), base_version is not the latest spec version (stale_base), an op id was already reported by an earlier version (op_replayed), or a translator turn of the conversation is open (busy)"
           },
           "422": {
             "content": {
@@ -1423,7 +1913,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1637,7 +2127,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1723,7 +2213,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1902,7 +2392,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {
@@ -1987,7 +2477,7 @@
                 }
               }
             },
-            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), or the device is already paired (already_paired)"
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), the device is already paired (already_paired), base_version is not the latest spec version (stale_base), an op id was already reported by an earlier version (op_replayed), or a translator turn of the conversation is open (busy)"
           },
           "413": {
             "content": {
@@ -2007,7 +2497,7 @@
                 }
               }
             },
-            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed)"
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
           },
           "429": {
             "content": {

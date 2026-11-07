@@ -105,3 +105,39 @@ def test_feedback_route_and_schema_documented():
     listing = doc["paths"]["/app/v1/sketch/conversations"]["get"]["responses"]["200"]
     item = listing["content"]["application/json"]["schema"]["items"]["properties"]
     assert "latest_feedback_id" in item
+
+
+def test_upload_documents_layout_and_region_parts():
+    doc = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    post = doc["paths"]["/app/v1/sketch/sketches"]["post"]
+    upload = doc["components"]["schemas"]["SketchUpload"]
+    props = upload["properties"]
+    assert "layout.0.json" in props and "region.0.0.png" in props
+    text = json.dumps(upload)
+    for word in ("layout.<i>.json", "region.<i>.<k>.png", "base_version"):
+        assert word in text, word
+    assert "stale_base" in post["responses"]["409"]["description"]
+    assert "op_replayed" in post["responses"]["409"]["description"]
+    assert "stale_target" in post["responses"]["422"]["description"]
+    schemas = doc["components"]["schemas"]
+    for name in ("PageLayout", "EditOp", "Segment", "VisibleRun", "Geometry", "Region"):
+        assert name in schemas, name
+    assert schemas["EditOp"]["properties"]["kind"]["enum"] == [
+        "replace",
+        "delete",
+        "insert",
+        "image",
+    ]
+
+
+def test_spec_schema_has_layout():
+    doc = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    schemas = doc["components"]["schemas"]
+    spec = schemas["Spec"]
+    assert "layout" in spec["required"]
+    assert spec["properties"]["layout"] == {
+        "anyOf": [{"$ref": "#/components/schemas/SpecLayout"}, {"type": "null"}]
+    }
+    for name in ("SpecLayout", "SpecLine", "OpStatus"):
+        assert name in schemas, name
+    assert "reverted_from" in schemas["SpecLayout"]["properties"]

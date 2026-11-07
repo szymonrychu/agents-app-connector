@@ -299,6 +299,8 @@ Environment variables use the `APPCONN_` prefix. Required: `APPCONN_DATABASE_URL
 | `APPCONN_MCP_PORT` | 8002 | translator tools port, must differ from the admin and device ports |
 | `APPCONN_MAX_DOCUMENT_BYTES` | 262144 | `document_write` size cap (1024 to 1048576) |
 | `APPCONN_MAX_FEEDBACK_PER_RUN` | 30 | `feedback_add` items per turn (1 to 200) |
+| `APPCONN_MAX_REGIONS_PER_PAGE` | 4 | `region.<i>.<k>.png` parts per notebook page (0 to 16) |
+| `APPCONN_MAX_LAYOUT_BYTES` | 262144 | size cap of one `layout.<i>.json` part (1024 to 1048576) |
 
 ## Subcommands
 

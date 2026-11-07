@@ -53,6 +53,8 @@ class Settings(BaseServiceSettings):
     mcp_port: int = 8002
     max_document_bytes: int = Field(262144, ge=1024, le=1048576)
     max_feedback_per_run: int = Field(30, ge=1, le=200)
+    max_regions_per_page: int = Field(4, ge=0, le=16)
+    max_layout_bytes: int = Field(262144, ge=1024, le=1048576)
 
     @property
     def max_body_bytes(self) -> int:

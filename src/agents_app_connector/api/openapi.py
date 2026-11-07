@@ -222,6 +222,12 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
             },
         },
     ),
+    ("get", "/conversations/{conversation_id}/images/{region_id}.png"): (
+        "200",
+        "a region image of the conversation with an ETag; 304 on a matching If-None-Match",
+        "image/png",
+        {"type": "string", "format": "binary"},
+    ),
     ("get", "/attachments/{attachment_id}"): (
         "200",
         "the stored file with an ETag; 304 on a matching If-None-Match",
@@ -459,6 +465,7 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/conversations/{conversation_id}/spec/{version}"): (401, 404, 422, 429),
     ("get", "/conversations/{conversation_id}/feedback"): (401, 404, 422, 429),
     ("get", "/attachments/{attachment_id}"): (401, 404, 410, 429),
+    ("get", "/conversations/{conversation_id}/images/{region_id}.png"): (401, 404, 422, 429),
     ("get", "/handoff/targets"): (401, 429, 502, 503),
     ("get", "/tasks"): (401, 422, 429, 503),
     ("post", "/tasks"): (401, 413, 422, 429, 503),
@@ -499,6 +506,9 @@ SUMMARIES = {
     "/conversations/{conversation_id}/spec/{version}": "One spec version",
     "/conversations/{conversation_id}/feedback": "Translator feedback after a cursor",
     "/attachments/{attachment_id}": "Download a stored sketch file",
+    "/conversations/{conversation_id}/images/{region_id}.png": (
+        "A region image the spec references as images/<region_id>.png"
+    ),
     "/handoff/targets": "Sessions and presets a spec can be handed to",
     "/conversations/{conversation_id}/handoff": "Hand the latest spec to a session",
     "/tasks": "List or create tasks (relayed to the taskboard)",

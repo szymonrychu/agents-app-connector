@@ -555,6 +555,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
             "markdown": row.markdown,
             "created": row.created_at.isoformat(),
             "sketch_ids": [str(i) for i in row.sketch_ids],
+            "layout": row.layout,
         }
 
     async def spec_row(conversation_id: uuid.UUID, version: int | None) -> specs.SpecRow:
@@ -601,6 +602,23 @@ def build_router(deps: PluginDeps) -> APIRouter:
             ],
             "cursor": rows[-1].id if rows else after,
         }
+
+    @router.get("/conversations/{conversation_id}/images/{region_id}.png")
+    async def spec_image(
+        conversation_id: Conversation, region_id: uuid.UUID, request: Request
+    ) -> Response:
+        async with pool.connection() as conn:
+            row = await spec_images.get(conn, conversation_id, region_id)
+        if row is None:
+            raise ApiError(404, "not_found", "image not found")
+        etag = f'"{row.sha256}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        try:
+            data = await asyncio.to_thread(store.read, row.path)
+        except OSError:
+            raise ApiError(404, "not_found", "image file is gone") from None
+        return Response(data, media_type="image/png", headers={"ETag": etag})
 
     @router.get("/attachments/{attachment_id}")
     async def get_attachment(

@@ -1833,6 +1833,92 @@
         "summary": "Hand the latest spec to a session"
       }
     },
+    "/app/v1/sketch/conversations/{conversation_id}/images/{region_id}.png": {
+      "get": {
+        "operationId": "spec_image_app_v1_sketch_conversations__conversation_id__images__region_id__png_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Region Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "a region image of the conversation with an ETag; 304 on a matching If-None-Match"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "missing, unknown, revoked or other-plugin bearer token (unauthorized)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such conversation, attachment or device (not_found, no_spec, unknown_session)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
+          }
+        },
+        "security": [
+          {
+            "deviceToken": []
+          }
+        ],
+        "summary": "A region image the spec references as images/<region_id>.png"
+      }
+    },
     "/app/v1/sketch/conversations/{conversation_id}/messages": {
       "post": {
         "operationId": "post_message_app_v1_sketch_conversations__conversation_id__messages_post",

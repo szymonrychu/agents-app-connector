@@ -80,6 +80,7 @@ async def test_upload_after_revert_is_stale_base(device_api, token, conn):
     """Review Focus 1: a revert makes a newer version, so ops on the old base are 409
     stale_base, never 422 or a misapplied op."""
     cid = await conv_with_base(device_api, token, conn)
+    await conn.execute("UPDATE inbound SET status = 'handled'")
     await specs.add(conn, uuid.UUID(cid), BASE + "more\n", None, [], None, layout=BASE_LAYOUT)
     r = await device_api.post(
         f"/conversations/{cid}/spec/1/revert", json={"base_version": 2}, headers=bearer(token)

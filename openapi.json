@@ -696,6 +696,22 @@
         "title": "Region",
         "type": "object"
       },
+      "RevertIn": {
+        "additionalProperties": false,
+        "description": "Body of a revert: the latest spec version the app shows.",
+        "properties": {
+          "base_version": {
+            "minimum": 1.0,
+            "title": "Base Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base_version"
+        ],
+        "title": "RevertIn",
+        "type": "object"
+      },
       "Segment": {
         "additionalProperties": false,
         "description": "New handwriting of one row, split at gaps wider than two cells.",
@@ -2232,6 +2248,119 @@
           }
         ],
         "summary": "One spec version"
+      }
+    },
+    "/app/v1/sketch/conversations/{conversation_id}/spec/{version}/revert": {
+      "post": {
+        "description": "Copy version N (markdown and layout, line ids unchanged) as a new version. A replay\nafter success is 409 stale_base: the base check is the idempotency.",
+        "operationId": "revert_spec_app_v1_sketch_conversations__conversation_id__spec__version__revert_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "reverted_from": {
+                      "type": "integer"
+                    },
+                    "version": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "the new version, a copy of version N (markdown and layout, line ids unchanged)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "missing, unknown, revoked or other-plugin bearer token (unauthorized)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such conversation, attachment or device (not_found, no_spec, unknown_session)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "a request with this client_id is in progress (in_progress), no spec yet (no_spec), the device is already paired (already_paired), base_version is not the latest spec version (stale_base), an op id was already reported by an earlier version (op_replayed), or a translator turn of the conversation is open (busy)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "invalid request (invalid_request, idempotency_mismatch, preset_not_allowed), or an op target no longer quotes the base version's source text (stale_target)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "per-device or pairing rate limit, see Retry-After (rate_limited), or too many devices wait for a pairing code (too_many_pending)"
+          }
+        },
+        "security": [
+          {
+            "deviceToken": []
+          }
+        ],
+        "summary": "Revert to spec version N: store a copy of it as the next version"
       }
     },
     "/app/v1/sketch/conversations/{conversation_id}/stream": {

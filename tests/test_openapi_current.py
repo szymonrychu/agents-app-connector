@@ -141,3 +141,17 @@ def test_spec_schema_has_layout():
     for name in ("SpecLayout", "SpecLine", "OpStatus"):
         assert name in schemas, name
     assert "reverted_from" in schemas["SpecLayout"]["properties"]
+
+
+def test_notebook_routes_documented():
+    doc = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    paths = doc["paths"]
+    image = paths["/app/v1/sketch/conversations/{conversation_id}/images/{region_id}.png"]["get"]
+    assert "image/png" in image["responses"]["200"]["content"]
+    assert {"401", "404"} <= set(image["responses"])
+    revert = paths["/app/v1/sketch/conversations/{conversation_id}/spec/{version}/revert"]["post"]
+    assert {"201", "401", "404", "409", "422"} <= set(revert["responses"])
+    assert "busy" in revert["responses"]["409"]["description"]
+    assert "stale_base" in revert["responses"]["409"]["description"]
+    body = revert["requestBody"]["content"]["application/json"]["schema"]
+    assert body == {"$ref": "#/components/schemas/RevertIn"}

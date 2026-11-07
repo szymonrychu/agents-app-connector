@@ -210,6 +210,12 @@ OK: dict[tuple[str, str], tuple[str, str, str, dict[str, Any]]] = {
         "application/json",
         {"$ref": "#/components/schemas/Spec"},
     ),
+    ("post", "/conversations/{conversation_id}/spec/{version}/revert"): (
+        "201",
+        "the new version, a copy of version N (markdown and layout, line ids unchanged)",
+        "application/json",
+        {"type": "object", "properties": {"version": INT, "reverted_from": INT}},
+    ),
     ("get", "/conversations/{conversation_id}/feedback"): (
         "200",
         "translator feedback items after the cursor, oldest first (at most 100)",
@@ -464,6 +470,7 @@ ROUTE_ERRORS: dict[tuple[str, str], tuple[int, ...]] = {
     ("get", "/conversations/{conversation_id}/spec.md"): (401, 404, 429),
     ("get", "/conversations/{conversation_id}/spec/{version}"): (401, 404, 422, 429),
     ("get", "/conversations/{conversation_id}/feedback"): (401, 404, 422, 429),
+    ("post", "/conversations/{conversation_id}/spec/{version}/revert"): (401, 404, 409, 422, 429),
     ("get", "/attachments/{attachment_id}"): (401, 404, 410, 429),
     ("get", "/conversations/{conversation_id}/images/{region_id}.png"): (401, 404, 422, 429),
     ("get", "/handoff/targets"): (401, 429, 502, 503),
@@ -505,6 +512,9 @@ SUMMARIES = {
     "/conversations/{conversation_id}/spec.md": "Latest spec as markdown",
     "/conversations/{conversation_id}/spec/{version}": "One spec version",
     "/conversations/{conversation_id}/feedback": "Translator feedback after a cursor",
+    "/conversations/{conversation_id}/spec/{version}/revert": (
+        "Revert to spec version N: store a copy of it as the next version"
+    ),
     "/attachments/{attachment_id}": "Download a stored sketch file",
     "/conversations/{conversation_id}/images/{region_id}.png": (
         "A region image the spec references as images/<region_id>.png"

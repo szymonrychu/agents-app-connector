@@ -19,7 +19,7 @@ from starlette.datastructures import FormData, UploadFile
 from agents_app_connector import clock
 from agents_app_connector.api.auth import active_device, device_auth
 from agents_app_connector.api.errors import ApiError
-from agents_app_connector.api.schemas import MessageIn, SketchMeta
+from agents_app_connector.api.schemas import MessageIn, RevertIn, SketchMeta
 from agents_app_connector.db import (
     attachments,
     conversations,
@@ -581,6 +581,39 @@ def build_router(deps: PluginDeps) -> APIRouter:
     @router.get("/conversations/{conversation_id}/spec/{version}")
     async def spec_version(conversation_id: Conversation, version: int) -> dict:
         return spec_json(await spec_row(conversation_id, version))
+
+    @router.post("/conversations/{conversation_id}/spec/{version}/revert", status_code=201)
+    async def revert_spec(conversation_id: Conversation, version: int, body: RevertIn) -> dict:
+        """Copy version N (markdown and layout, line ids unchanged) as a new version. A replay
+        after success is 409 stale_base: the base check is the idempotency."""
+        async with pool.connection() as conn, conn.transaction():
+            target = await specs.get(conn, conversation_id, version)
+            if target is None:
+                raise ApiError(404, "no_spec", "no such spec version")
+            latest = await specs.latest_version(conn, conversation_id)
+            if body.base_version != latest:
+                raise ApiError(409, "stale_base", f"spec version {latest} is the latest")
+            if version == latest:
+                raise ApiError(422, "invalid_request", "version is already the latest")
+            if await inbound.has_open(conn, conversation_id):
+                raise ApiError(409, "busy", "a translator turn of this conversation is open")
+            new_layout = (
+                None
+                if target.layout is None
+                else {**target.layout, "ops": [], "base_version": latest, "reverted_from": version}
+            )
+            new = await specs.add(
+                conn,
+                conversation_id,
+                target.markdown,
+                None,
+                target.sketch_ids,
+                None,
+                layout=new_layout,
+            )
+            await events.append(conn, conversation_id, "spec", {"version": new})
+            await conversations.touch(conn, conversation_id)
+        return {"version": new, "reverted_from": version}
 
     @router.get("/conversations/{conversation_id}/feedback")
     async def list_feedback(

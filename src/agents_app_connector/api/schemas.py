@@ -134,3 +134,11 @@ class MessageIn(BaseModel):
 
     client_id: uuid.UUID
     text: str = Field(min_length=1)
+
+
+class RevertIn(BaseModel):
+    """Body of a revert: the latest spec version the app shows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_version: int = Field(ge=1)

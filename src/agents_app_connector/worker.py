@@ -99,7 +99,7 @@ class Worker:
         self._files = store
         self._now = now
         self._runs = AppRunStore(pool)
-        self._handoffs = Handoffs(orchestrator, pool)
+        self._handoffs = Handoffs(orchestrator, pool, store)
 
     async def tick(self) -> None:
         try:

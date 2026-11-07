@@ -1,0 +1,36 @@
+{
+  "words": [
+    "buy",
+    "bread",
+    "eggs"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8,
+  "min_precision": 0.9,
+  "must_not": [
+    "milk",
+    "call",
+    "bob"
+  ],
+  "lines": [
+    {
+      "n": 1,
+      "kept": "L1",
+      "op": "21bf88e0-3b8a-548e-b4e3-9288230a91ab"
+    },
+    {
+      "n": 2,
+      "kept": "L2"
+    }
+  ],
+  "ops": [
+    {
+      "id": "21bf88e0-3b8a-548e-b4e3-9288230a91ab",
+      "status": "applied"
+    },
+    {
+      "id": "475539d3-d86f-5272-be64-ee8e4d1b5d4f",
+      "status": "applied"
+    }
+  ]
+}

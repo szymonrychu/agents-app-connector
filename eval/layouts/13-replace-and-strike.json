@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "geometry": {
+    "cell": 53,
+    "row_pitch": 106,
+    "top": 106,
+    "rows": 16,
+    "text_left": 53,
+    "margin_left": 983
+  },
+  "segments": [],
+  "runs": [
+    {
+      "line_id": "L1",
+      "row": 1,
+      "x0": 53
+    },
+    {
+      "line_id": "L2",
+      "row": 2,
+      "x0": 53
+    },
+    {
+      "line_id": "L3",
+      "row": 3,
+      "x0": 53
+    }
+  ],
+  "ops": [
+    {
+      "id": "21bf88e0-3b8a-548e-b4e3-9288230a91ab",
+      "kind": "replace",
+      "target": {
+        "line_id": "L1",
+        "from": 4,
+        "to": 8,
+        "quote": "milk"
+      },
+      "strokes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "rect": [
+        165.0,
+        218,
+        168.0,
+        40
+      ]
+    },
+    {
+      "id": "475539d3-d86f-5272-be64-ee8e4d1b5d4f",
+      "kind": "delete",
+      "target": {
+        "line_id": "L3",
+        "from": 0,
+        "to": 8,
+        "quote": "Call bob"
+      },
+      "strokes": [
+        9
+      ]
+    }
+  ]
+}

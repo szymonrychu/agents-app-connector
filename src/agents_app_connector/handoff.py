@@ -8,13 +8,20 @@ agents-common's `deliver`; a preset creates session `app-handoff-<id>` through `
 skip every stored step and adopt a message carrying the run's marker, so a retry posts the spec
 once. A target that is gone (or a preset that no longer exists) fails the hand-off, with no
 fallback: the user chose it. The tracker finishes the run when the message was sent.
+
+The region images the spec references as `images/<id>.png` travel as message attachments named
+`<id>.png` (Q10 B), within the orchestrator's per-message caps; the rest are listed by name.
 """
 
+import asyncio
 import logging
+import uuid
+from collections.abc import Sequence
 
 import psycopg
 from agents_common import runs as agent_runs
 from agents_common.orchestrator import (
+    Attachment,
     NotFound,
     OrchestratorClient,
     OrchestratorError,
@@ -23,8 +30,14 @@ from agents_common.orchestrator import (
 )
 from psycopg_pool import AsyncConnectionPool
 
-from agents_app_connector.db import conversations, events, handoffs, runs, specs
+from agents_app_connector.db import conversations, events, handoffs, runs, spec_images, specs
+from agents_app_connector.plugins.sketch.layout import image_ids
 from agents_app_connector.run_store import AppRunStore, handoff_event
+from agents_app_connector.settings import (
+    ORCHESTRATOR_ATTACHMENTS_MAX_COUNT,
+    ORCHESTRATOR_ATTACHMENTS_MAX_TOTAL_BYTES,
+)
+from agents_app_connector.storage import AttachmentStore
 
 log = logging.getLogger(__name__)
 
@@ -33,12 +46,39 @@ SESSION_GONE = "session_gone"
 NO_PRESET = "no_preset"
 NO_SPEC = "no_spec"
 USAGE_QUOTA = "usage_quota"
+# T-46 OQ5 pending: a spec with more images than one message carries attaches the first ones in
+# document order and lists the rest by name (Recommended). Another answer changes only this
+# constant and split_images.
+HANDOFF_MAX_IMAGES = ORCHESTRATOR_ATTACHMENTS_MAX_COUNT
+
+
+def split_images(
+    images: Sequence[tuple[uuid.UUID, bytes]],
+    *,
+    max_count: int = HANDOFF_MAX_IMAGES,
+    max_bytes: int = ORCHESTRATOR_ATTACHMENTS_MAX_TOTAL_BYTES,
+) -> tuple[list[tuple[uuid.UUID, bytes]], list[uuid.UUID]]:
+    """T-46 OQ5 pending: the images to attach, in order, within the message's count and byte
+    caps, and the ids of the ones left to list by name."""
+    attached: list[tuple[uuid.UUID, bytes]] = []
+    listed: list[uuid.UUID] = []
+    total = 0
+    for region_id, data in images:
+        if len(attached) < max_count and total + len(data) <= max_bytes:
+            attached.append((region_id, data))
+            total += len(data)
+        else:
+            listed.append(region_id)
+    return attached, listed
 
 
 class Handoffs:
-    def __init__(self, orchestrator: OrchestratorClient, pool: AsyncConnectionPool) -> None:
+    def __init__(
+        self, orchestrator: OrchestratorClient, pool: AsyncConnectionPool, store: AttachmentStore
+    ) -> None:
         self._orchestrator = orchestrator
         self._pool = pool
+        self._store = store
         self._runs = AppRunStore(pool)
 
     async def tick(self) -> None:
@@ -144,6 +184,9 @@ class Handoffs:
             f"Spec from the Boox sketch translator (conversation {row.conversation_id}, "
             f"version {row.spec_version}):\n\n{spec.markdown}"
         )
+        files, note = await self._images(row, spec.markdown)
+        if note:
+            text = f"{text.rstrip()}\n\n{note}"
         ref = runs.to_ref(run)
         marker = agent_runs.marker(RUN_KIND, ref.id)
         try:
@@ -155,11 +198,14 @@ class Handoffs:
                     str(row.target_session_id),
                     text,
                     marker,
+                    attachments=files or None,
                 )
                 if delivered is None:
                     await self._runs.finish(run.id, "failed", SESSION_GONE)
             else:
-                await agent_runs.dispatch(self._orchestrator, self._runs, ref, text, marker)
+                await agent_runs.dispatch(
+                    self._orchestrator, self._runs, ref, text, marker, attachments=files or None
+                )
         except UsageQuotaRefused:
             await self._runs.finish(run.id, "failed", USAGE_QUOTA)
         except NotFound as exc:  # dispatch finished the run
@@ -169,3 +215,32 @@ class Handoffs:
         except OrchestratorError as exc:
             log.warning("handoff run %s refused: %s %s", run.id, exc.status, exc.code)
             await self._runs.finish(run.id, "failed", exc.code)
+
+    async def _images(
+        self, row: handoffs.HandoffRow, markdown: str
+    ) -> tuple[list[Attachment], str]:
+        """The referenced region images as attachments and the note that names them."""
+        found: list[tuple[uuid.UUID, bytes]] = []
+        gone: list[uuid.UUID] = []
+        for region_id in image_ids(markdown):
+            async with self._pool.connection() as conn:
+                att = await spec_images.get(conn, row.conversation_id, region_id)
+            try:
+                if att is None:
+                    raise OSError("no such image")
+                found.append((region_id, await asyncio.to_thread(self._store.read, att.path)))
+            except OSError:
+                gone.append(region_id)
+        attached, listed = split_images(found)
+        lines = []
+        if attached:
+            names = ", ".join(f"images/{i}.png" for i, _ in attached)
+            lines.append(f"Images: {names} are attached under the same names.")
+        if listed:
+            names = ", ".join(f"images/{i}.png" for i in listed)
+            lines.append(f"Not attached (attachment limit): {names}")
+        if gone:
+            names = ", ".join(f"images/{i}.png" for i in gone)
+            lines.append(f"Not attached (no longer stored): {names}")
+        files = [Attachment(f"{i}.png", "image/png", data) for i, data in attached]
+        return files, "\n".join(lines)

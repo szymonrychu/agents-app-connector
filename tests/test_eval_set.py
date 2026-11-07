@@ -22,7 +22,13 @@ NAMES = [
     "09-colour-shapes",
     "10-annotated-spec",
     "11-bare-wireframe",
+    "12-notebook-lines",
+    "13-replace-and-strike",
+    "14-margin-insert",
+    "15-image-region",
 ]
+NOTEBOOK = ["12-notebook-lines", "13-replace-and-strike", "14-margin-insert", "15-image-region"]
+WITH_BASE = NOTEBOOK[1:]
 COLOUR = "09-colour-shapes"
 ANNOTATED = "10-annotated-spec"
 BARE = "11-bare-wireframe"
@@ -78,6 +84,8 @@ def test_items_valid_for_upload():
         assert expected["diagram"] in ("flowchart", "table", "sequenceDiagram", None)
         assert expected["min_word_recall"] == 0.8
         assert expected["min_precision"] == (0.95 if name == BARE else 0.9)
+        if name in NOTEBOOK:
+            assert (w, h) == (1176, 1568)
 
 
 def test_annotated_item_regenerates_identically_with_base_page_and_spec(tmp_path):
@@ -314,3 +322,170 @@ def test_illegible_marker_carries_no_word():
     exp = {"words": ["buy", "milk"], "diagram": None}
     sc = ev.score("BUY [illegible] MILK", exp)
     assert sc.recall == 1.0 and sc.precision == 1.0
+
+
+# notebook items (12-15)
+
+
+def _same_image(a_path, b_path):
+    with Image.open(a_path) as a, Image.open(b_path) as b:
+        assert a.mode == b.mode and a.size == b.size
+        assert a.tobytes() == b.tobytes(), a_path
+
+
+def _notebook_files(name):
+    out = [f"layouts/{name}.json", f"strokes/{name}.json"]
+    if name in WITH_BASE:
+        out += [
+            f"layouts/{name}.base.json",
+            f"strokes/{name}.base.json",
+            f"specs/{name}.md",
+            f"specs/{name}.png",
+        ]
+    if name == "15-image-region":
+        out.append("regions/15-image-region.0.0.png")
+    return out
+
+
+def test_notebook_items_regenerate_identically(tmp_path):
+    make.generate(tmp_path)
+    for name in NOTEBOOK:
+        for rel in _notebook_files(name):
+            if rel.endswith(".png"):
+                _same_image(tmp_path / rel, ROOT / "eval" / rel)
+            else:
+                assert (tmp_path / rel).read_bytes() == (ROOT / "eval" / rel).read_bytes(), rel
+    assert sorted(p.name for p in (tmp_path / "layouts").iterdir()) == sorted(
+        p.name for p in (ROOT / "eval" / "layouts").iterdir()
+    )
+
+
+def _check(name, suffix=""):
+    from agents_app_connector.api.schemas import Canvas
+    from agents_app_connector.plugins.sketch import layout as lay
+
+    raw = (ROOT / "eval" / "layouts" / f"{name}{suffix}.json").read_bytes()
+    parsed = lay.parse_layout(raw, index=0, max_bytes=262144)
+    strokes = json.loads((ROOT / "eval" / "strokes" / f"{name}{suffix}.json").read_text())
+    regions = {
+        "region." + p.name.removeprefix(f"{name}.")
+        for p in (ROOT / "eval" / "regions").glob(f"{name}.*.png")
+    }
+    lay.check_layout(
+        parsed,
+        index=0,
+        strokes_count=len(strokes["strokes"]),
+        canvas=Canvas(**strokes["canvas"]),
+        region_parts=set() if suffix else regions,
+    )
+    lay.check_unique_ops([parsed])
+    return parsed
+
+
+def test_notebook_items_valid_for_upload():
+    from agents_app_connector.plugins.sketch import layout as lay
+
+    for name in NOTEBOOK:
+        parsed = _check(name)
+        assert parsed.segments or parsed.ops, name
+        for path in (ROOT / "eval" / "regions").glob(f"{name}.*.png"):
+            validate_png(path.read_bytes(), max_long_edge=1568, min_edge=1, max_bytes=6291456)
+        if name in WITH_BASE:
+            base = _check(name, ".base")
+            assert base.segments and not base.ops and not base.runs
+            md = (ROOT / "eval" / "specs" / f"{name}.md").read_text()
+            assert len(md.splitlines()) == len(base.segments)
+            ids = [f"L{n}" for n in range(1, len(md.splitlines()) + 1)]
+            stored = lay.SpecLayout(
+                lines=[lay.SpecLine(line_id=i, source_line=n) for n, i in enumerate(ids, 1)]
+            )
+            lay.check_base({0: parsed}, md, stored)
+        else:
+            assert not parsed.ops and not parsed.runs
+
+
+def test_notebook_expected_has_lines_and_op_statuses():
+    for name in NOTEBOOK:
+        exp = json.loads((ROOT / "eval" / "expected" / f"{name}.json").read_text())
+        parsed = _check(name)
+        assert {o["id"] for o in exp["ops"]} == {str(o.id) for o in parsed.ops}, name
+        assert all(o["status"] in ("applied", "rejected") for o in exp["ops"])
+        covered = {s for line in exp["lines"] for s in line.get("segments", [])}
+        assert covered == {s.id for s in parsed.segments}, name
+        assert [line["n"] for line in exp["lines"]] == sorted(line["n"] for line in exp["lines"])
+    assert json.loads((ROOT / "eval" / "expected" / "15-image-region.json").read_text())["images"]
+
+
+def test_rebase_layout_maps_line_ids_and_quotes():
+    layout = json.loads((ROOT / "eval" / "layouts" / "13-replace-and-strike.json").read_text())
+    base_md = (ROOT / "eval" / "specs" / "13-replace-and-strike.md").read_text()
+    spec = {
+        "version": 1,
+        "markdown": "- Buy Milk\n- buy eggs\n- Call Bob\n",
+        "layout": {
+            "lines": [
+                {"line_id": "L7", "source_line": 1},
+                {"line_id": "L8", "source_line": 2},
+                {"line_id": "L9", "source_line": 3},
+            ]
+        },
+    }
+    out = ev.rebase_layout(layout, base_md, spec)
+    assert [r["line_id"] for r in out["runs"]] == ["L7", "L8", "L9"]
+    replace, strike = out["ops"]
+    assert replace["target"] == {"line_id": "L7", "from": 6, "to": 10, "quote": "Milk"}
+    assert strike["target"] == {"line_id": "L9", "from": 2, "to": 10, "quote": "Call Bob"}
+    assert layout["runs"][0]["line_id"] == "L1"  # the input is not changed
+
+
+def test_notebook_checks():
+    exp = json.loads((ROOT / "eval" / "expected" / "15-image-region.json").read_text())
+    op_id, region = exp["ops"][0]["id"], exp["images"][0]
+    spec = {
+        "markdown": f"Garden plan\nPlant roses\n![image](images/{region}.png)\n",
+        "layout": {"lines": [], "ops": [{"id": op_id, "status": "applied"}]},
+    }
+    assert ev.notebook_checks(spec, exp) == {
+        "ops_ok": True,
+        "lines_ok": True,
+        "images_ok": True,
+        "forbidden": [],
+    }
+    spec["markdown"] += "Shed\n"
+    spec["layout"]["ops"][0]["status"] = "rejected"
+    checks = ev.notebook_checks(spec, exp)
+    assert checks["forbidden"] == ["shed"] and checks["ops_ok"] is False
+    assert ev.score(spec["markdown"], exp).invented == ["shed"]  # image refs carry no word
+
+
+def test_run_item_notebook_uploads_base_then_page_on_base_version():
+    import httpx
+
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request.content)
+            return httpx.Response(202, json={"conversation_id": "c1"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if request.url.path.endswith("/events"):
+            done = {"type": "sketch_status", "status": "done"}
+            return httpx.Response(200, json={"cursor": 2, "events": [done, done]})
+        if request.url.path.endswith("/feedback"):
+            return httpx.Response(200, json={"items": [], "cursor": 0})
+        if request.url.path.endswith("/spec"):
+            lines = [{"line_id": f"L{n}", "source_line": n} for n in (1, 2)]
+            return httpx.Response(
+                200,
+                json={"version": 1, "markdown": "Buy milk\nCall bob\n", "layout": {"lines": lines}},
+            )
+        return httpx.Response(200, text="Buy milk and jam\nCall bob\n")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = ev.run_item(client, "http://x", "14-margin-insert", 5)
+    assert len(posts) == 2
+    assert b"layout.0.json" in posts[0] and b"base_version" not in posts[0]
+    assert b'"base_version": 1' in posts[1] and b'"conversation_id": "c1"' in posts[1]
+    assert result["status"] == "done" and result["recall"] == 1.0
+    assert result["lines_ok"] is True and result["ops_ok"] is False  # the mock reports no ops

@@ -1,0 +1,37 @@
+{
+  "words": [
+    "garden",
+    "plan",
+    "plant",
+    "roses"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8,
+  "min_precision": 0.9,
+  "must_not": [
+    "shed"
+  ],
+  "images": [
+    "bf15fcea-3ae3-532e-b7fb-b63d1f03f6cb"
+  ],
+  "lines": [
+    {
+      "n": 1,
+      "kept": "L1"
+    },
+    {
+      "n": 2,
+      "kept": "L2"
+    },
+    {
+      "n": 3,
+      "op": "a2027fdd-4d96-50f0-a61d-6f9378c5487d"
+    }
+  ],
+  "ops": [
+    {
+      "id": "a2027fdd-4d96-50f0-a61d-6f9378c5487d",
+      "status": "applied"
+    }
+  ]
+}

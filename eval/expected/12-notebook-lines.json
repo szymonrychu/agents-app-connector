@@ -1,0 +1,52 @@
+{
+  "words": [
+    "plan",
+    "for",
+    "monday",
+    "call",
+    "the",
+    "bank",
+    "pay",
+    "rent",
+    "fix",
+    "bike",
+    "book",
+    "flights"
+  ],
+  "diagram": null,
+  "min_word_recall": 0.8,
+  "min_precision": 0.9,
+  "lines": [
+    {
+      "n": 1,
+      "segments": [
+        "p0-r1-0"
+      ]
+    },
+    {
+      "n": 2,
+      "segments": [
+        "p0-r2-0"
+      ]
+    },
+    {
+      "n": 3,
+      "segments": [
+        "p0-r2-1"
+      ]
+    },
+    {
+      "n": 4,
+      "segments": [
+        "p0-r3-0"
+      ]
+    },
+    {
+      "n": 5,
+      "segments": [
+        "p0-r5-0"
+      ]
+    }
+  ],
+  "ops": []
+}

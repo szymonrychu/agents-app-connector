@@ -2,8 +2,10 @@
 
 import asyncio
 import hashlib
+import re
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Annotated
 
@@ -12,20 +14,32 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import ValidationError
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 
 from agents_app_connector import clock
 from agents_app_connector.api.auth import active_device, device_auth
 from agents_app_connector.api.errors import ApiError
 from agents_app_connector.api.schemas import MessageIn, SketchMeta
-from agents_app_connector.db import attachments, conversations, events, feedback, inbound, specs
+from agents_app_connector.db import (
+    attachments,
+    conversations,
+    events,
+    feedback,
+    inbound,
+    spec_images,
+    specs,
+)
 from agents_app_connector.db.devices import DeviceRow
 from agents_app_connector.images import validate_png, validate_strokes
 from agents_app_connector.plugins import PluginDeps
-from agents_app_connector.plugins.sketch import handoff_routes, pair_routes, task_routes
+from agents_app_connector.plugins.sketch import handoff_routes, layout, pair_routes, task_routes
+from agents_app_connector.plugins.sketch.layout import layout_field, region_field
+from agents_app_connector.settings import Settings
 
 PLUGIN_ID = "sketch"
 API_VERSION = 1
+JSON = "application/json"
+REGION_FIELD = re.compile(r"^region\.([0-9]+)\.([0-9]+)\.png$")
 
 
 def png_field(index: int) -> str:
@@ -80,6 +94,204 @@ async def _read_part(part: object, name: str, cap: int) -> bytes:
     return data
 
 
+@dataclass
+class Parts:
+    """The file parts of one upload, by page index (and region index k)."""
+
+    pngs: list[bytes]
+    strokes: list[bytes | None]
+    layouts: dict[int, bytes] = field(default_factory=dict)
+    regions: dict[tuple[int, int], bytes] = field(default_factory=dict)
+
+    @property
+    def total(self) -> int:
+        return sum(len(d) for d in self.in_field_order())
+
+    def in_field_order(self) -> list[bytes]:
+        """Per page png, strokes, layout and its regions by k; absent parts left out."""
+        out: list[bytes] = []
+        for i, png in enumerate(self.pngs):
+            out += [d for d in (png, self.strokes[i], self.layouts.get(i)) if d is not None]
+            out += [d for (p, _), d in sorted(self.regions.items()) if p == i]
+        return out
+
+
+async def _read_parts(form: FormData, meta: SketchMeta, settings: Settings) -> Parts:
+    count = len(meta.pages)
+    if count > settings.max_pages:
+        raise ApiError(422, "invalid_request", f"meta.pages: at most {settings.max_pages} pages")
+    regions: dict[tuple[int, int], str] = {}
+    for key in form:
+        match = REGION_FIELD.match(key)
+        if match and int(match[1]) < count:
+            regions[(int(match[1]), int(match[2]))] = key
+    for i in {p for p, _ in regions}:
+        if sum(1 for p, _ in regions if p == i) > settings.max_regions_per_page:
+            raise ApiError(
+                422,
+                "invalid_request",
+                f"page {i}: at most {settings.max_regions_per_page} region parts",
+            )
+    allowed = {"meta", *regions.values()}
+    for i in range(count):
+        allowed |= {png_field(i), strokes_field(i), layout_field(i)}
+    if any(k not in allowed for k in form):
+        raise ApiError(422, "invalid_request", "unknown form field")
+    parts = Parts(pngs=[], strokes=[])
+    for i in range(count):
+        parts.pngs.append(
+            await _read_part(form.get(png_field(i)), png_field(i), settings.max_png_bytes)
+        )
+        part = form.get(strokes_field(i))
+        parts.strokes.append(
+            None
+            if part is None
+            else await _read_part(part, strokes_field(i), settings.max_strokes_bytes)
+        )
+        part = form.get(layout_field(i))
+        if part is not None:
+            parts.layouts[i] = await _read_part(part, layout_field(i), settings.max_layout_bytes)
+    for (i, k), name in regions.items():
+        parts.regions[(i, k)] = await _read_part(form.get(name), name, settings.max_png_bytes)
+    return parts
+
+
+async def _validate_parts(
+    parts: Parts, meta: SketchMeta, settings: Settings
+) -> tuple[dict, dict[int, layout.PageLayout]]:
+    """PNG sizes by page index and by region field name, and the checked page layouts. The
+    CPU-bound validation runs in threads, off the event loop."""
+
+    def png(data: bytes, min_edge: int) -> tuple[int, int]:
+        return validate_png(
+            data,
+            max_long_edge=settings.max_long_edge_px,
+            min_edge=min_edge,
+            max_bytes=settings.max_png_bytes,
+        )
+
+    page_sizes = await asyncio.gather(
+        *(asyncio.to_thread(png, d, settings.min_edge_px) for d in parts.pngs)
+    )
+    # A region is a crop of the page, so it may be smaller than a page's minimum edge.
+    region_keys = sorted(parts.regions)
+    region_sizes = await asyncio.gather(
+        *(asyncio.to_thread(png, parts.regions[key], 1) for key in region_keys)
+    )
+    docs = await asyncio.gather(
+        *(
+            asyncio.to_thread(validate_strokes, d, max_bytes=settings.max_strokes_bytes)
+            if d is not None
+            else _none()
+            for d in parts.strokes
+        )
+    )
+    layouts = {
+        i: layout.parse_layout(raw, index=i, max_bytes=settings.max_layout_bytes)
+        for i, raw in sorted(parts.layouts.items())
+    }
+    for i in sorted({p for p, _ in parts.regions} - set(layouts)):
+        raise ApiError(422, "invalid_request", f"{region_field(i, 0)}: no layout of page {i}")
+    for i, lay in layouts.items():
+        doc = docs[i]
+        layout.check_layout(
+            lay,
+            index=i,
+            strokes_count=None if doc is None else len(doc["strokes"]),
+            canvas=meta.pages[i].canvas,
+            region_parts={region_field(p, k) for p, k in parts.regions if p == i},
+        )
+    layout.check_unique_ops(layouts.values())
+    if meta.base_version is None and any(lay.ops for lay in layouts.values()):
+        raise ApiError(422, "invalid_request", "meta.base_version: required when a layout has ops")
+    sizes: dict = dict(enumerate(page_sizes))
+    sizes.update(
+        {region_field(i, k): size for (i, k), size in zip(region_keys, region_sizes, strict=True)}
+    )
+    return sizes, layouts
+
+
+async def _none() -> None:
+    return None
+
+
+async def _check_base(
+    conn: psycopg.AsyncConnection,
+    conversation_id: uuid.UUID,
+    base_version: int,
+    layouts: dict[int, layout.PageLayout],
+) -> None:
+    """409 `stale_base` unless base_version is the latest version, 409 `op_replayed` for an op
+    id an earlier version already reported, then the line ids and quotes against the base."""
+    if await specs.latest_version(conn, conversation_id) != base_version:
+        raise ApiError(409, "stale_base", f"spec version {base_version} is not the latest")
+    reported = await specs.reported_op_ids(conn, conversation_id)
+    for lay in layouts.values():
+        for op in lay.ops:
+            if op.id in reported:
+                raise ApiError(409, "op_replayed", f"op {op.id} was already reported")
+    base = await specs.get(conn, conversation_id, base_version)
+    assert base is not None  # it is the latest version
+    stored = None if base.layout is None else layout.SpecLayout.model_validate(base.layout)
+    layout.check_base(layouts, base.markdown, stored)
+
+
+@dataclass(frozen=True)
+class _Stored:
+    kind: str
+    mime: str
+    data: bytes
+    id: uuid.UUID
+    page: int
+    width: int | None = None
+    height: int | None = None
+    region_id: uuid.UUID | None = None
+
+
+def _stored_parts(
+    parts: Parts,
+    meta: SketchMeta,
+    sizes: dict,
+    layouts: dict[int, layout.PageLayout],
+    sketch_id: uuid.UUID,
+) -> list[_Stored]:
+    """The attachment rows of an upload; the first page's png carries the sketch id."""
+    region_ids = {
+        op.region.part: op.region.id
+        for lay in layouts.values()
+        for op in lay.ops
+        if op.region is not None
+    }
+    out: list[_Stored] = []
+    for i, page_meta in enumerate(meta.pages):
+        page = page_meta.page
+        w, h = sizes[i]
+        out.append(
+            _Stored(
+                "sketch_png",
+                "image/png",
+                parts.pngs[i],
+                sketch_id if i == 0 else uuid.uuid4(),
+                page,
+                w,
+                h,
+            )
+        )
+        if parts.strokes[i] is not None:
+            out.append(_Stored("sketch_strokes", JSON, parts.strokes[i], uuid.uuid4(), page))
+        if i in parts.layouts:
+            out.append(_Stored("sketch_layout", JSON, parts.layouts[i], uuid.uuid4(), page))
+        for (p, k), data in sorted(parts.regions.items()):
+            if p != i:
+                continue
+            name = region_field(p, k)
+            w, h = sizes[name]
+            out.append(
+                _Stored("spec_image", "image/png", data, uuid.uuid4(), page, w, h, region_ids[name])
+            )
+    return out
+
+
 def _event_json(row: events.EventRow) -> dict:
     return {
         "cursor": row.id,
@@ -111,64 +323,20 @@ def build_router(deps: PluginDeps) -> APIRouter:
 
     @router.post("/sketches")
     async def upload(request: Request, device: Device) -> JSONResponse:
+        max_files = settings.max_pages * (3 + settings.max_regions_per_page)
         async with request.form(
-            max_files=2 * settings.max_pages, max_fields=1, max_part_size=settings.max_meta_bytes
+            max_files=max_files, max_fields=1, max_part_size=settings.max_meta_bytes
         ) as form:
             meta = _parse_meta(form.get("meta"), settings.max_meta_bytes)
-            count = len(meta.pages)
-            if count > settings.max_pages:
-                raise ApiError(
-                    422, "invalid_request", f"meta.pages: at most {settings.max_pages} pages"
-                )
-            allowed = {"meta"}
-            for i in range(count):
-                allowed |= {png_field(i), strokes_field(i)}
-            if any(k not in allowed for k in form):
-                raise ApiError(422, "invalid_request", "unknown form field")
-            pngs: list[bytes] = []
-            strokes: list[bytes | None] = []
-            for i in range(count):
-                pngs.append(
-                    await _read_part(form.get(png_field(i)), png_field(i), settings.max_png_bytes)
-                )
-                part = form.get(strokes_field(i))
-                strokes.append(
-                    None
-                    if part is None
-                    else await _read_part(part, strokes_field(i), settings.max_strokes_bytes)
-                )
-        new_bytes = sum(len(b) for b in pngs) + sum(len(b) for b in strokes if b is not None)
-        if new_bytes > settings.max_upload_bytes:
+            parts = await _read_parts(form, meta, settings)
+        if parts.total > settings.max_upload_bytes:
             raise ApiError(413, "too_large", f"upload exceeds {settings.max_upload_bytes} bytes")
-        # The CPU-bound validation runs in threads, off the event loop.
-        sizes = await asyncio.gather(
-            *(
-                asyncio.to_thread(
-                    validate_png,
-                    data,
-                    max_long_edge=settings.max_long_edge_px,
-                    min_edge=settings.min_edge_px,
-                    max_bytes=settings.max_png_bytes,
-                )
-                for data in pngs
-            )
-        )
-        await asyncio.gather(
-            *(
-                asyncio.to_thread(validate_strokes, data, max_bytes=settings.max_strokes_bytes)
-                for data in strokes
-                if data is not None
-            )
-        )
+        sizes, layouts = await _validate_parts(parts, meta, settings)
 
         meta_dict = meta.model_dump(mode="json")
-        digests = [
-            _sha(d)
-            for png, st in zip(pngs, strokes, strict=True)
-            for d in (png, st)
-            if d is not None
-        ]
-        fp = inbound.fingerprint(meta_dict, digests)
+        if meta.base_version is None:
+            meta_dict.pop("base_version")  # plain uploads keep their fingerprint
+        fp = inbound.fingerprint(meta_dict, [_sha(d) for d in parts.in_field_order()])
         written: list[str] = []
         try:
             async with pool.connection() as conn, conn.transaction():
@@ -183,7 +351,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
                         status_code=200,
                     )
                 used = await attachments.device_usage_bytes(conn, device.id)
-                if used + new_bytes > settings.device_quota_bytes:
+                if used + parts.total > settings.device_quota_bytes:
                     raise ApiError(413, "quota_exceeded", "device storage quota exceeded")
                 if meta.conversation_id is not None:
                     owned_row = await conversations.get_owned(conn, meta.conversation_id, device.id)
@@ -194,6 +362,8 @@ def build_router(deps: PluginDeps) -> APIRouter:
                         await specs.get(conn, conversation_id, meta.annotates.spec_version) is None
                     ):
                         raise ApiError(404, "no_spec", "no such spec version")
+                    if meta.base_version is not None:
+                        await _check_base(conn, conversation_id, meta.base_version, layouts)
                 elif meta.conversation == "new":
                     conversation_id = await conversations.create(conn, device.id, PLUGIN_ID)
                 else:
@@ -211,39 +381,29 @@ def build_router(deps: PluginDeps) -> APIRouter:
                     meta=meta_dict,
                 )
                 expires_at = clock.utcnow() + timedelta(days=settings.retention_days)
-                parts = []
-                for i, page_meta in enumerate(meta.pages):
-                    w, h = sizes[i]
-                    parts.append(
-                        ("sketch_png", "image/png", pngs[i], sketch_id if i == 0 else uuid.uuid4())
-                        + (w, h, page_meta.page)
-                    )
-                    if strokes[i] is not None:
-                        parts.append(
-                            ("sketch_strokes", "application/json", strokes[i], uuid.uuid4())
-                            + (None, None, page_meta.page)
-                        )
-                for kind, mime, data, att_id, w, h, page in parts:
-                    stored = await asyncio.to_thread(store.put, device.id, att_id, data)
+                for part in _stored_parts(parts, meta, sizes, layouts, sketch_id):
+                    stored = await asyncio.to_thread(store.put, device.id, part.id, part.data)
                     written.append(stored.path)
                     await attachments.insert(
                         conn,
                         attachments.NewAttachment(
-                            id=att_id,
+                            id=part.id,
                             inbound_id=sketch_id,
                             conversation_id=conversation_id,
                             device_id=device.id,
-                            kind=kind,
-                            mime=mime,
+                            kind=part.kind,
+                            mime=part.mime,
                             size=stored.size,
                             sha256=stored.sha256,
                             path=stored.path,
-                            expires_at=expires_at,
-                            width=w,
-                            height=h,
-                            page=page,
+                            expires_at=None if part.region_id is not None else expires_at,
+                            width=part.width,
+                            height=part.height,
+                            page=part.page,
                         ),
                     )
+                    if part.region_id is not None:
+                        await spec_images.put(conn, conversation_id, part.region_id, part.id)
                 await conversations.touch(conn, conversation_id)
                 await events.append(
                     conn,

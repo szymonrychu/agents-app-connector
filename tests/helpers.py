@@ -45,14 +45,52 @@ def meta(**over):
     return json.dumps({**base, **over})
 
 
-def files(png_bytes=None, with_strokes=False, count=1):
-    """Parts sketch.<i>.png (and strokes.<i>.json) for i in range(count)."""
+def files(png_bytes=None, with_strokes=False, count=1, layouts=None, regions=None):
+    """Parts sketch.<i>.png (and strokes.<i>.json) for i in range(count); `layouts` maps a page
+    index to a layout dict (or raw bytes), `regions` maps (i, k) to PNG bytes."""
     out = {}
     for i in range(count):
         out[f"sketch.{i}.png"] = (f"sketch.{i}.png", png_bytes or png(), "image/png")
         if with_strokes:
             out[f"strokes.{i}.json"] = (f"strokes.{i}.json", strokes().encode(), "application/json")
+    for i, lay in (layouts or {}).items():
+        raw = lay if isinstance(lay, bytes) else json.dumps(lay).encode()
+        out[f"layout.{i}.json"] = (f"layout.{i}.json", raw, "application/json")
+    for (i, k), data in (regions or {}).items():
+        out[f"region.{i}.{k}.png"] = (f"region.{i}.{k}.png", data, "image/png")
     return out
+
+
+NOTEBOOK_CANVAS = {"w": 1404, "h": 1872, "dpi": 227}
+GEOMETRY = {
+    "cell": 53,
+    "row_pitch": 106,
+    "top": 106,
+    "rows": 16,
+    "text_left": 53,
+    "margin_left": 983,
+}
+
+
+def strokes_n(n):
+    """A strokes.json with n strokes."""
+    doc = {"version": 1, "canvas": NOTEBOOK_CANVAS, "strokes": [{"points": []}] * n}
+    return json.dumps(doc).encode()
+
+
+def layout(segments=(), runs=(), ops=()):
+    """A layout.<i>.json body of a notebook page."""
+    return {
+        "version": 1,
+        "geometry": GEOMETRY,
+        "segments": list(segments),
+        "runs": list(runs),
+        "ops": list(ops),
+    }
+
+
+def region_png(w=300, h=200):
+    return png(w, h)
 
 
 def stored_files(store):

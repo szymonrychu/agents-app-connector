@@ -23,6 +23,22 @@ async def add(
     )
 
 
+async def put(
+    conn: psycopg.AsyncConnection,
+    conversation_id: uuid.UUID,
+    region_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+) -> None:
+    """Add, or point an existing region id at the newer crop (a re-sent op whose earlier upload
+    no version reported; a reported one is refused as op_replayed before this)."""
+    await conn.execute(
+        "INSERT INTO spec_images (conversation_id, region_id, attachment_id) VALUES (%s, %s, %s) "
+        "ON CONFLICT (conversation_id, region_id) DO UPDATE "
+        "SET attachment_id = EXCLUDED.attachment_id, created_at = now()",
+        (conversation_id, region_id, attachment_id),
+    )
+
+
 async def get(
     conn: psycopg.AsyncConnection, conversation_id: uuid.UUID, region_id: uuid.UUID
 ) -> attachments.AttachmentRow | None:

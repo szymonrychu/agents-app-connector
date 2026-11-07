@@ -17,6 +17,7 @@ TABLES = {
     "events": "writer: app",
     "feedback": "writer: app",
     "handoffs": "queue: insert by app api, transitions by app worker",
+    "spec_images": "writer: app",
 }
 SHA = "a" * 64
 
@@ -155,3 +156,43 @@ async def test_specs_have_no_front_matter_column(conn):
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'specs'"
     )
     assert "front_matter" not in {r[0] for r in await cur.fetchall()}
+
+
+async def _inbound(conn, cid, did):
+    iid = uuid.uuid4()
+    await conn.execute(
+        "INSERT INTO inbound (id, conversation_id, device_id, client_id, fingerprint, kind, "
+        "status) VALUES (%s, %s, %s, %s, 'f', 'sketch', 'queued')",
+        (iid, cid, did, uuid.uuid4()),
+    )
+    return iid
+
+
+async def test_migration_0006_layout_and_spec_images(conn):
+    did = await _device(conn)
+    cid = await _conversation(conn, did)
+    iid = await _inbound(conn, cid, did)
+    await conn.execute(
+        "INSERT INTO specs (conversation_id, version, markdown, layout) VALUES (%s, 1, 'a', %s)",
+        (cid, '{"lines": []}'),
+    )
+    sql = (
+        "INSERT INTO attachments (id, inbound_id, conversation_id, device_id, kind, mime, size, "
+        "sha256, path, expires_at) VALUES (%s, %s, %s, %s, %s, 'x', 1, %s, 'p', %s)"
+    )
+    for kind in ("sketch_layout", "spec_image"):
+        await conn.execute(sql, (uuid.uuid4(), iid, cid, did, kind, SHA, None))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        await conn.execute(sql, (uuid.uuid4(), iid, cid, did, "other", SHA, None))
+    att = uuid.uuid4()
+    await conn.execute(sql, (att, iid, cid, did, "spec_image", SHA, None))
+    region = uuid.uuid4()
+    images = (
+        "INSERT INTO spec_images (conversation_id, region_id, attachment_id) VALUES (%s, %s, %s)"
+    )
+    await conn.execute(images, (cid, region, att))
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        await conn.execute(images, (cid, region, att))
+    await conn.execute("DELETE FROM attachments WHERE id = %s", (att,))
+    cur = await conn.execute("SELECT count(*) FROM spec_images")
+    assert (await cur.fetchone())[0] == 0

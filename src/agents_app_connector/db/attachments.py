@@ -18,7 +18,7 @@ class NewAttachment:
     size: int
     sha256: str
     path: str
-    expires_at: datetime
+    expires_at: datetime | None
     width: int | None = None
     height: int | None = None
     page: int | None = None
@@ -40,7 +40,7 @@ class AttachmentRow:
     height: int | None
     page: int | None
     created_at: datetime
-    expires_at: datetime
+    expires_at: datetime | None
     purged_at: datetime | None
 
 

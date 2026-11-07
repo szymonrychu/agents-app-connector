@@ -7,6 +7,7 @@ from datetime import datetime
 
 import psycopg
 from psycopg.rows import class_row
+from psycopg.types.json import Jsonb
 
 
 async def latest_version(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> int | None:
@@ -30,9 +31,10 @@ class SpecRow:
     sketch_ids: list[uuid.UUID]
     run_id: int | None
     created_at: datetime
+    layout: dict | None = None
 
 
-_COLUMNS = "conversation_id, version, markdown, inbound_id, sketch_ids, run_id, created_at"
+_COLUMNS = "conversation_id, version, markdown, inbound_id, sketch_ids, run_id, created_at, layout"
 
 
 async def add(
@@ -42,16 +44,51 @@ async def add(
     inbound_id: uuid.UUID | None,
     sketch_ids: Sequence[uuid.UUID],
     run_id: int | None,
+    layout: dict | None = None,
 ) -> int:
     """Store the next version (1 for the first) and return it. One run per conversation is in
     progress at a time; the primary key rejects a racing second writer."""
     cur = await conn.execute(
-        "INSERT INTO specs (conversation_id, version, markdown, inbound_id, sketch_ids, run_id) "
-        "SELECT %s, coalesce(max(version), 0) + 1, %s, %s, %s, %s "
+        "INSERT INTO specs "
+        "(conversation_id, version, markdown, inbound_id, sketch_ids, run_id, layout) "
+        "SELECT %s, coalesce(max(version), 0) + 1, %s, %s, %s, %s, %s "
         "FROM specs WHERE conversation_id = %s RETURNING version",
-        (conversation_id, markdown, inbound_id, list(sketch_ids), run_id, conversation_id),
+        (
+            conversation_id,
+            markdown,
+            inbound_id,
+            list(sketch_ids),
+            run_id,
+            None if layout is None else Jsonb(layout),
+            conversation_id,
+        ),
     )
     return (await cur.fetchone())[0]
+
+
+async def max_line_number(conn: psycopg.AsyncConnection, conversation_id: uuid.UUID) -> int:
+    """The largest N of every line id `L<N>` in every layout of the conversation, 0 when none.
+    Line ids are never reused, so new ones continue after this (also after a revert)."""
+    cur = await conn.execute(
+        "SELECT coalesce(max(substr(l->>'line_id', 2)::bigint), 0) FROM specs s, "
+        "jsonb_array_elements(coalesce(s.layout->'lines', '[]'::jsonb)) l "
+        "WHERE s.conversation_id = %s",
+        (conversation_id,),
+    )
+    return int((await cur.fetchone())[0])
+
+
+async def reported_op_ids(
+    conn: psycopg.AsyncConnection, conversation_id: uuid.UUID
+) -> set[uuid.UUID]:
+    """Every op id an earlier version's layout reported (applied or rejected)."""
+    cur = await conn.execute(
+        "SELECT DISTINCT o->>'id' FROM specs s, "
+        "jsonb_array_elements(coalesce(s.layout->'ops', '[]'::jsonb)) o "
+        "WHERE s.conversation_id = %s",
+        (conversation_id,),
+    )
+    return {uuid.UUID(r[0]) for r in await cur.fetchall()}
 
 
 async def last_of_run(conn: psycopg.AsyncConnection, run_id: int) -> int | None:

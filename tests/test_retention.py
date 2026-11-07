@@ -136,3 +136,15 @@ async def test_settled_pairing_codes_age_out_and_pending_ones_stay(pool, conn, s
     await purge(pool, store, now(), retention_days=30)
     rows = await (await conn.execute("SELECT status FROM pairing_codes")).fetchall()
     assert rows == [("pending",)]
+
+
+async def test_spec_images_never_purged(pool, conn, store, upload):
+    await upload()
+    await conn.execute("UPDATE attachments SET expires_at = NULL WHERE kind = 'sketch_strokes'")
+    result = await purge(pool, store, now() + timedelta(days=3650))
+    assert result.files == 1
+    cur = await conn.execute(
+        "SELECT count(*) FROM attachments WHERE expires_at IS NULL AND purged_at IS NULL"
+    )
+    assert (await cur.fetchone())[0] == 1
+    assert len(stored_files(store)) == 1

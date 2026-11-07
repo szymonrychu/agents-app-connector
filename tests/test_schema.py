@@ -196,3 +196,58 @@ async def test_migration_0006_layout_and_spec_images(conn):
     await conn.execute("DELETE FROM attachments WHERE id = %s", (att,))
     cur = await conn.execute("SELECT count(*) FROM spec_images")
     assert (await cur.fetchone())[0] == 0
+
+
+def test_migration_0006_keeps_rows_that_predate_it(pg_url):
+    """Specs and attachments written before 0006 survive it: layout NULL, expiry kept."""
+    from importlib import resources
+
+    base = pg_url.rsplit("/", 1)[0]
+    name = f"t_{uuid.uuid4().hex}"
+    files = sorted(
+        (resources.files("agents_app_connector") / "migrations").iterdir(),
+        key=lambda f: f.name,
+    )
+    before = [f for f in files if f.name < "0006"]
+    this = next(f for f in files if f.name.startswith("0006_"))
+    with psycopg.connect(pg_url, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{name}"')
+    try:
+        with psycopg.connect(f"{base}/{name}", autocommit=True) as c:
+            for f in before:
+                c.execute(f.read_text())
+            did, cid, iid, att = (uuid.uuid4() for _ in range(4))
+            c.execute("INSERT INTO devices (id, plugin, name) VALUES (%s, 'sketch', 'd')", (did,))
+            c.execute(
+                "INSERT INTO conversations (id, device_id, plugin, state) "
+                "VALUES (%s, %s, 'sketch', 'open')",
+                (cid, did),
+            )
+            c.execute(
+                "INSERT INTO inbound (id, conversation_id, device_id, client_id, fingerprint, "
+                "kind, status) VALUES (%s, %s, %s, %s, 'f', 'sketch', 'handled')",
+                (iid, cid, did, uuid.uuid4()),
+            )
+            c.execute(
+                "INSERT INTO attachments (id, inbound_id, conversation_id, device_id, kind, "
+                "mime, size, sha256, path, expires_at) "
+                "VALUES (%s, %s, %s, %s, 'sketch_png', 'image/png', 1, %s, 'p', now())",
+                (att, iid, cid, did, SHA),
+            )
+            c.execute(
+                "INSERT INTO specs (conversation_id, version, markdown) VALUES (%s, 1, 'old')",
+                (cid,),
+            )
+            c.execute(this.read_text())
+            assert c.execute("SELECT markdown, layout FROM specs").fetchall() == [("old", None)]
+            kind, expires = c.execute("SELECT kind, expires_at FROM attachments").fetchone()
+            assert kind == "sketch_png" and expires is not None
+            assert c.execute("SELECT count(*) FROM spec_images").fetchone() == (0,)
+            c.execute(
+                "INSERT INTO specs (conversation_id, version, markdown, layout) "
+                "VALUES (%s, 2, 'new', %s)",
+                (cid, '{"lines": []}'),
+            )
+    finally:
+        with psycopg.connect(pg_url, autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')

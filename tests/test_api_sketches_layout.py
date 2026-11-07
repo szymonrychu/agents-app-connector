@@ -343,3 +343,15 @@ async def test_resent_region_deletes_the_replaced_attachment_and_file(
     kept = await rows(conn, "SELECT width, path FROM attachments WHERE kind = 'spec_image'")
     assert [w for w, _ in kept] == [320]
     assert len(stored_files(store)) == await count(conn, "attachments")
+
+
+async def test_oversized_layout_part_413(make_app, token, conn):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=make_app(max_layout_bytes=1024)),
+        base_url="http://dev" + PREFIX,
+    ) as api:
+        cid = await conv_with_base(api, token, conn)
+        big = layout() | {"pad": "x" * 2000}
+        r = await send(api, token, cid, big, base=None)
+        err(r, 413, "too_large", "layout.0.json")
+        assert await count(conn, "inbound") == 1  # only the conversation's creating upload

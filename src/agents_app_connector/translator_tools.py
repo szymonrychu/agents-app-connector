@@ -44,6 +44,7 @@ from agents_app_connector.db import (
     spec_images,
     specs,
 )
+from agents_app_connector.db.specs import SpecRow
 from agents_app_connector.line_ids import LineIdError, LineProvenance, assign
 from agents_app_connector.plugins.sketch.layout import (
     OpStatus,
@@ -259,7 +260,16 @@ class TranslatorTools:
             elif lines or ops:
                 raise ToolError(f"{LAYOUT_NOT_EXPECTED}: lines and ops are only for notebook pages")
             else:
-                stored = None
+                previous = await specs.latest(conn, run.conversation_id)
+                stored = (
+                    None
+                    if previous is None or previous.layout is None
+                    else _carried_layout(
+                        markdown,
+                        previous,
+                        await specs.max_line_number(conn, run.conversation_id) + 1,
+                    )
+                )
             sketch_ids = await inbound.sketch_ids_upto(conn, row)
             version = await specs.add(
                 conn, run.conversation_id, markdown, row.id, sketch_ids, run.id, layout=stored
@@ -343,6 +353,17 @@ def _spec_layout(
     return SpecLayout(lines=assigned, ops=statuses, base_version=base_version).model_dump(
         mode="json"
     )
+
+
+def _carried_layout(markdown: str, previous: SpecRow, next_number: int) -> dict:
+    """The layout of a turn that sends no page (a text follow-up) in a conversation whose latest
+    version has one: the source lines keep the ids of the previous version in source order, the
+    lines past its end get new ids, no ops. The next upload can then name the same line ids."""
+    base = SpecLayout.model_validate(previous.layout)
+    ordered = sorted(base.lines, key=lambda line: line.source_line)
+    provenance = [LineProvenance(n=n, kept=line.line_id) for n, line in enumerate(ordered, start=1)]
+    assigned = assign(markdown, provenance[: len(markdown.splitlines())], base, next_number)
+    return SpecLayout(lines=assigned, base_version=previous.version).model_dump(mode="json")
 
 
 def _session_id() -> uuid.UUID:

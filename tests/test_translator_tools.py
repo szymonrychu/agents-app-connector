@@ -572,3 +572,30 @@ async def test_plain_turn_rejects_lines_and_ops(mcp, translator, conn):
     assert result["isError"] is False and result["structuredContent"]["lines"] == 2
     row = await specs.latest(conn, uuid.UUID(conv))
     assert row.layout is None
+
+
+async def test_text_follow_up_carries_the_layout_so_the_next_upload_works(
+    mcp, notebook, conn, worker, fake, sessions, say, device_api, token
+):
+    tok, cid, ids = await notebook()
+    result = await call(mcp, tok, "document_write", **notebook_args(ids))
+    assert result["isError"] is False, result
+    v2 = await specs.get(conn, uuid.UUID(cid), 2)
+    await conn.execute("UPDATE runs SET status = 'handled', finished_at = now()")
+    await conn.execute("UPDATE inbound SET status = 'handled'")
+    await say(cid, "make it shorter")
+    await worker.tick()
+    session_id = uuid.UUID(fake.messages[max(fake.messages)]["session_id"])
+    sessions.tokens["follow"] = session_id
+    short = notebook_doc(ids["region"]).replace("new line\n", "")
+    result = await call(mcp, "follow", "document_write", markdown=short)
+    assert result["isError"] is False, result
+    v3 = await specs.get(conn, uuid.UUID(cid), 3)
+    assert v3.layout["ops"] == [] and v3.layout["base_version"] == 2
+    assert [x["line_id"] for x in v3.layout["lines"]] == ["L1", "L2", "L3"]
+    assert [x["source_line"] for x in v3.layout["lines"]] == [1, 2, 3]
+    assert v3.layout["lines"][0]["line_id"] == v2.layout["lines"][0]["line_id"]
+    await conn.execute("UPDATE runs SET status = 'handled', finished_at = now()")
+    await conn.execute("UPDATE inbound SET status = 'handled'")
+    r = await send(device_api, token, cid, layout(runs=[{"line_id": "L1", "row": 1, "x0": 53}]), 3)
+    assert r.status_code == 202, r.text

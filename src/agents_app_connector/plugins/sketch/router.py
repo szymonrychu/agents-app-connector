@@ -222,7 +222,9 @@ async def _check_base(
     layouts: dict[int, layout.PageLayout],
 ) -> None:
     """409 `stale_base` unless base_version is the latest version, 409 `op_replayed` for an op
-    id an earlier version already reported, then the line ids and quotes against the base."""
+    id an earlier version already reported, then the line ids and quotes against the base. The
+    conversation row is locked first so a racing revert cannot move the latest version."""
+    await conversations.lock(conn, conversation_id)
     if await specs.latest_version(conn, conversation_id) != base_version:
         raise ApiError(409, "stale_base", f"spec version {base_version} is not the latest")
     reported = await specs.reported_op_ids(conn, conversation_id)
@@ -587,6 +589,7 @@ def build_router(deps: PluginDeps) -> APIRouter:
         """Copy version N (markdown and layout, line ids unchanged) as a new version. A replay
         after success is 409 stale_base: the base check is the idempotency."""
         async with pool.connection() as conn, conn.transaction():
+            await conversations.lock(conn, conversation_id)
             target = await specs.get(conn, conversation_id, version)
             if target is None:
                 raise ApiError(404, "no_spec", "no such spec version")

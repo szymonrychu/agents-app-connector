@@ -1,5 +1,6 @@
 """Revert a conversation to an earlier spec version (Q15 B)."""
 
+import asyncio
 import uuid
 
 from helpers import bearer, layout, paired, rows
@@ -121,3 +122,26 @@ async def test_line_ids_after_revert_continue_from_max(device_api, token, conn, 
     assert result["isError"] is False, result
     v4 = await specs.get(conn, uuid.UUID(cid), 4)
     assert [x["line_id"] for x in v4.layout["lines"]] == ["L1", "L2", "L10"]
+
+
+async def test_concurrent_reverts_one_wins_rest_409(device_api, token, conn):
+    cid = await two_versions(device_api, token, conn)
+    results = await asyncio.gather(
+        *(revert(device_api, token, cid, 1, 2) for _ in range(6)), return_exceptions=True
+    )
+    assert not [r for r in results if isinstance(r, Exception)], results
+    codes = sorted(r.status_code for r in results)
+    assert codes == [201, 409, 409, 409, 409, 409]
+    assert {r.json()["error"] for r in results if r.status_code == 409} == {"stale_base"}
+    assert await specs.latest_version(conn, uuid.UUID(cid)) == 3
+
+
+async def test_revert_racing_upload_never_both_succeed(device_api, token, conn):
+    cid = await two_versions(device_api, token, conn)
+    rev, up = await asyncio.gather(
+        revert(device_api, token, cid, 1, 2),
+        send(device_api, token, cid, layout(), base=2),
+        return_exceptions=True,
+    )
+    assert not isinstance(rev, Exception) and not isinstance(up, Exception)
+    assert (rev.status_code, up.status_code) in {(201, 409), (409, 202)}

@@ -274,10 +274,9 @@ async def test_handoff_attaches_referenced_images(
     names = [a.name for a in fake.attachments[msg["id"]]]
     assert names == [f"{ids[1]}.png", f"{ids[0]}.png"]
     assert fake.attachments[msg["id"]][0].data == b"\x89PNG-x" + ids[1].bytes
-    assert (
-        f"Images: images/{ids[1]}.png, images/{ids[0]}.png are attached under the same names."
-        in msg["text"]
-    )
+    listed = msg["text"].split("Images: ")[1].split(" are attached")[0].split(", ")
+    assert listed == names
+    assert "the document refers to each as images/<name>" in msg["text"]
     assert "Not attached" not in msg["text"]
 
 

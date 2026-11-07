@@ -235,8 +235,10 @@ class Handoffs:
         attached, listed = split_images(found)
         lines = []
         if attached:
-            names = ", ".join(f"images/{i}.png" for i, _ in attached)
-            lines.append(f"Images: {names} are attached under the same names.")
+            names = ", ".join(f"{i}.png" for i, _ in attached)
+            lines.append(
+                f"Images: {names} are attached; the document refers to each as images/<name>."
+            )
         if listed:
             names = ", ".join(f"images/{i}.png" for i in listed)
             lines.append(f"Not attached (attachment limit): {names}")

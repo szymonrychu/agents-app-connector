@@ -361,23 +361,21 @@ def test_notebook_items_regenerate_identically(tmp_path):
 
 
 def _check(name, suffix=""):
-    from agents_app_connector.api.schemas import Canvas
+    import uuid
+
+    from agents_app_connector.api.schemas import Canvas, PageMeta, SketchMeta
     from agents_app_connector.plugins.sketch import layout as lay
 
     raw = (ROOT / "eval" / "layouts" / f"{name}{suffix}.json").read_bytes()
     parsed = lay.parse_layout(raw, index=0, max_bytes=262144)
     strokes = json.loads((ROOT / "eval" / "strokes" / f"{name}{suffix}.json").read_text())
     regions = {
-        "region." + p.name.removeprefix(f"{name}.")
-        for p in (ROOT / "eval" / "regions").glob(f"{name}.*.png")
+        (0, int(p.name.split(".")[-2])) for p in (ROOT / "eval" / "regions").glob(f"{name}.*.png")
     }
-    lay.check_layout(
-        parsed,
-        index=0,
-        strokes_count=len(strokes["strokes"]),
-        canvas=Canvas(**strokes["canvas"]),
-        region_parts=set() if suffix else regions,
-    )
+    canvas = Canvas(**strokes["canvas"])
+    lay.check_layout(parsed, index=0, strokes_count=len(strokes["strokes"]), canvas=canvas)
+    meta = SketchMeta(client_id=uuid.uuid4(), pages=[PageMeta(page=0, canvas=canvas)])
+    lay.check_region_parts(meta, {0: parsed}, set() if suffix else regions)
     lay.check_unique_ops([parsed])
     return parsed
 

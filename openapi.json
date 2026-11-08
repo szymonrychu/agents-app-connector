@@ -648,6 +648,49 @@
         "title": "PairResponse",
         "type": "object"
       },
+      "PictureRegion": {
+        "additionalProperties": false,
+        "description": "A freehand picture of a page: embedded as `![image](images/<id>.png)` from its PNG part.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "part": {
+            "pattern": "^region\\.[0-9]+\\.[0-9]+\\.png$",
+            "title": "Part",
+            "type": "string"
+          },
+          "rect": {
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Rect",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "rect",
+          "part"
+        ],
+        "title": "PictureRegion",
+        "type": "object"
+      },
       "PresetTarget": {
         "additionalProperties": false,
         "properties": {
@@ -761,11 +804,11 @@
             "type": "string"
           },
           "meta": {
-            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}}], \"annotates\"?: {\"spec_version\": int >= 1, \"pages\": [{\"page\": int, \"doc_page\": int, \"lines\": [int, int]}]}}. annotates needs conversation_id and answers 404 no_spec when that spec version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png. \"base_version\"?: int >= 1 is the spec version whose text the board showed; it needs conversation_id, excludes annotates, is required when any layout carries ops, and answers 409 stale_base when it is not the latest version.",
+            "description": "JSON: {\"client_id\": uuid, \"conversation\": \"current\"|\"new\", \"conversation_id\"?: uuid, \"caption\"?: string, \"pages\": [{\"page\": int, \"canvas\": {\"w\", \"h\", \"dpi\"}, \"regions\"?: [{\"id\": uuid, \"rect\": [x, y, w, h], \"part\": \"region.<i>.<k>.png\"}]}], \"annotates\"?: {\"spec_version\": int >= 1, \"pages\": [{\"page\": int, \"doc_page\": int, \"lines\": [int, int]}]}}. annotates needs conversation_id and answers 404 no_spec when that spec version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) belongs to pages[i]; every page needs its png. \"base_version\"?: int >= 1 is the spec version whose text the board showed; it needs conversation_id, excludes annotates, is required when any layout carries ops, and answers 409 stale_base when it is not the latest version. Each page may carry \"regions\" (PictureRegion): pictures of pages[i] embedded as ![image](images/<id>.png), allowed with or without a layout.",
             "type": "string"
           },
           "region.0.0.png": {
-            "description": "region.<i>.<k>.png: the PNG an image op of pages[i] names in region.part (k < APPCONN_MAX_REGIONS_PER_PAGE). Every region part must be referenced and every referenced part present. Stored for the conversation's lifetime and served by the images route; counts toward the upload size and the device quota.",
+            "description": "region.<i>.<k>.png: the PNG named by exactly one image op of pages[i] or one entry of pages[i].regions (k < APPCONN_MAX_REGIONS_PER_PAGE). Every region part must be named and every named part present. Stored for the conversation's lifetime and served by the images route; counts toward the upload size and the device quota.",
             "format": "binary",
             "type": "string"
           },

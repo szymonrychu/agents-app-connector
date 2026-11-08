@@ -19,12 +19,6 @@ FINAL_LINE = (
     "Your reply text is discarded."
 )
 MISSING_FILE = "(sketch file no longer stored)"
-# T-46 OQ3: non-insert margin ink is forwarded to the translator as ordinary ink.
-MARGIN_INK = (
-    "Ink in the right margin that no op names is a note on the printed rows: apply it under "
-    "the annotated-spec rule of your instructions (the nearest lines), or ask with feedback_add "
-    "when you cannot place it."
-)
 
 
 def load_preset() -> dict:
@@ -78,6 +72,11 @@ def _op_line(op: "EditOp") -> str:
             else f"after {at.line_id}"
         )
         return head + f"insert {where} from the margin note{rect}"
+    if op.kind == "note":
+        return head + (
+            f"note from the margin ink{rect}: apply it to the line its arrow points at, "
+            "or to the nearest lines it annotates; reject it when you cannot place it"
+        )
     region = op.region
     after = "" if region is None or region.after_line is None else f" after {region.after_line}"
     return (
@@ -153,7 +152,6 @@ class SketchPlugin:
             )
         if turn.layouts:
             parts.append(self._notebook_instruction(turn))
-            parts.append(MARGIN_INK)
         if turn.caption:
             parts.append(f"Caption: {turn.caption}")
         if turn.text:

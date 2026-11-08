@@ -28,6 +28,7 @@ def op(kind, **over):
             "at": {"line_id": "L1", "offset": 8, "mode": "inline"},
             "rect": [990, 300, 200, 90],
         },
+        "note": {"rect": [990, 300, 200, 90]},
         "image": {
             "region": {"id": str(uuid.uuid4()), "part": "region.0.0.png", "after_line": "L1"},
             "rect": [60, 600, 400, 300],
@@ -42,7 +43,7 @@ def page_layout(**over):
         "geometry": GEOMETRY,
         "segments": [{"id": "p0-r4-0", "row": 4, "x0": 60.0, "x1": 900.5, "strokes": [1, 2]}],
         "runs": [{"line_id": "L1", "row": 1, "x0": 53.0}],
-        "ops": [op("replace"), op("delete"), op("insert"), op("image")],
+        "ops": [op("replace"), op("delete"), op("insert"), op("image"), op("note")],
     }
     return {**base, **over}
 
@@ -66,11 +67,15 @@ def test_page_layout_round_trip():
         ("insert", "rect"),
         ("image", "region"),
         ("image", "rect"),
+        ("note", "rect"),
+        ("note", "strokes"),
     ],
 )
 def test_op_kind_requires_its_fields(kind, missing):
     raw = op(kind)
     raw.pop(missing)
+    if missing == "strokes":
+        raw["strokes"] = []
     with pytest.raises(ValidationError, match=missing):
         layout.EditOp.model_validate(raw)
 
@@ -134,3 +139,8 @@ def test_base_version_excludes_annotates():
     ann = {"spec_version": 1, "pages": [{"page": 0, "doc_page": 0, "lines": [0, 1]}]}
     with pytest.raises(ValidationError, match="base_version cannot be combined with annotates"):
         _meta(base_version=1, annotates=ann)
+
+
+def test_note_op_needs_no_target():
+    parsed = layout.EditOp.model_validate(op("note"))
+    assert parsed.kind == "note" and parsed.target is None and parsed.at is None

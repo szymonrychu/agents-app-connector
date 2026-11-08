@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 from test_plugins import make_turn
 
 from agents_app_connector.plugins import NotebookPage, TurnFile
-from agents_app_connector.plugins.sketch import MARGIN_INK, PLUGIN
+from agents_app_connector.plugins.sketch import PLUGIN
 from agents_app_connector.plugins.sketch.layout import PageLayout, SpecLayout
 
 FINAL = (
@@ -309,7 +309,6 @@ def test_notebook_prompt_snapshot():
         "are given above), the handwriting is new: transcribe each segment, apply each op to "
         "spec version 3 and call document_write with the full revised document, lines and "
         "ops.\n\n"
-        f"{MARGIN_INK}\n\n"
         "Spec version 3:\n```markdown\nShop list\nbuy milk\n```\n"
         "Line ids of spec version 3:\nL11: line 1\nL12: line 2\n\n"
         f"Op ids: 3f2a={OP_IDS[0]}, 9c1d={OP_IDS[1]}, 7b7b={OP_IDS[2]}, a1a1={OP_IDS[3]}\n\n"
@@ -325,6 +324,21 @@ def test_notebook_prompt_insert_after_line_and_image_without_anchor():
     p = PLUGIN.render_prompt(t)
     assert "op 7b7b insert after L12 from the margin note (rect 990,300,300,91)\n" in p
     assert f"op a1a1 image region {REGION} (rect 60,600,400,300): do not transcribe inside" in p
+
+
+def test_notebook_prompt_renders_note_op_without_target():
+    raw = NB_LAYOUT.model_dump(mode="json", by_alias=True)
+    raw["ops"].append(
+        {
+            "id": "6d6d0000-0000-4000-8000-000000000006",
+            "kind": "note",
+            "strokes": [3],
+            "rect": [990, 400, 200, 80],
+        }
+    )
+    t = _notebook_turn(layouts=[NotebookPage(0, PageLayout.model_validate(raw), 1404)])
+    p = PLUGIN.render_prompt(t)
+    assert "op 6d6d note from the margin ink (rect 990,400,200,80): apply it" in p
 
 
 def test_notebook_prompt_carries_base_in_full():
@@ -348,7 +362,7 @@ def test_plain_prompts_unchanged_by_notebook_support():
     aid = t.files[0].attachment_id
     p = PLUGIN.render_prompt(t)
     assert p == f"Image 1: sketch-{aid}.png (page 0)\n\nCaption: login screen\n\n" + FINAL
-    assert "Notebook" not in p and MARGIN_INK not in p
+    assert "Notebook" not in p
 
 
 def test_notebook_layout_and_region_files_never_attached():

@@ -1,6 +1,6 @@
 # Eval set
 
-Fifteen synthetic handwriting sketches (`sketches/*.png`, 8-bit grayscale except `09-colour-shapes` and `10-annotated-spec`, which are RGB with black, blue and red ink; long edge 1568 px) with
+Sixteen synthetic handwriting sketches (`sketches/*.png`, 8-bit grayscale except `09-colour-shapes` and `10-annotated-spec`, which are RGB with black, blue and red ink; long edge 1568 px) with
 expected words and diagram kind (`expected/*.json`). They contain no personal data.
 
 Regenerate (deterministic, seed 7, no platform fonts: glyphs are drawn from a stroke table with
@@ -54,6 +54,11 @@ they apply.
 - `15-image-region`: base v1 "Garden plan / Plant roses", an image region below it holding a
   drawn shed labelled SHED (not to be transcribed); `regions/15-image-region.0.0.png` is the
   app's crop.
+
+- `16-picture-and-boxes`: a plain page (no layout) with boxes LOGIN and HOME joined by an arrow
+  (a labelled flowchart) and a dashed frame holding a drawn shed labelled SHED. The runner sends
+  the frame as `meta.pages[0].regions` (`expected.pictures`) with `regions/16-picture-and-boxes.0.0.png`
+  and checks that the document references the picture (`images_ok`) and does not write SHED.
 
 Items 13-15 have a base page: `specs/<item>.png` with `layouts/<item>.base.json` and
 `strokes/<item>.base.json` (one segment per row), and `specs/<item>.md`, the text it should

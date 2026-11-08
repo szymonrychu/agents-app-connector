@@ -26,7 +26,9 @@ NAMES = [
     "13-replace-and-strike",
     "14-margin-insert",
     "15-image-region",
+    "16-picture-and-boxes",
 ]
+PICTURE = "16-picture-and-boxes"
 NOTEBOOK = ["12-notebook-lines", "13-replace-and-strike", "14-margin-insert", "15-image-region"]
 WITH_BASE = NOTEBOOK[1:]
 COLOUR = "09-colour-shapes"
@@ -487,3 +489,76 @@ def test_run_item_notebook_uploads_base_then_page_on_base_version():
     assert b'"base_version": 1' in posts[1] and b'"conversation_id": "c1"' in posts[1]
     assert result["status"] == "done" and result["recall"] == 1.0
     assert result["lines_ok"] is True and result["ops_ok"] is False  # the mock reports no ops
+
+
+# item 16: a picture and labelled boxes on a plain page
+
+
+def _picture_expected():
+    return json.loads((ROOT / "eval" / "expected" / f"{PICTURE}.json").read_text())
+
+
+def test_picture_item_regenerates_identically(tmp_path):
+    make.generate(tmp_path)
+    for rel in (f"sketches/{PICTURE}.png", f"regions/{PICTURE}.0.0.png"):
+        _same_image(tmp_path / rel, ROOT / "eval" / rel)
+    assert (tmp_path / "expected" / f"{PICTURE}.json").read_bytes() == (
+        ROOT / "eval" / "expected" / f"{PICTURE}.json"
+    ).read_bytes()
+
+
+def test_picture_item_valid_for_upload():
+    import uuid
+
+    from agents_app_connector.api.schemas import PageMeta, SketchMeta
+    from agents_app_connector.plugins.sketch import layout as lay
+
+    expected = _picture_expected()
+    assert expected["words"] == ["login", "home"] and expected["must_not"] == ["shed"]
+    assert expected["images"] == [p["id"] for p in expected["pictures"]]
+    canvas = {"w": 1568, "h": 1176, "dpi": 300}
+    pages = [
+        PageMeta.model_validate({"page": 0, "canvas": canvas, "regions": expected["pictures"]})
+    ]
+    meta = SketchMeta(client_id=uuid.uuid4(), pages=pages)
+    lay.check_region_parts(meta, {}, {(0, 0)})
+    data = (ROOT / "eval" / "regions" / f"{PICTURE}.0.0.png").read_bytes()
+    validate_png(data, max_long_edge=1568, min_edge=1, max_bytes=6291456)
+
+
+def test_run_item_picture_item_uploads_meta_regions_and_part():
+    import httpx
+
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request.content)
+            return httpx.Response(202, json={"conversation_id": "c1"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if request.url.path.endswith("/events"):
+            return httpx.Response(
+                200, json={"cursor": 1, "events": [{"type": "sketch_status", "status": "done"}]}
+            )
+        if request.url.path.endswith("/feedback"):
+            return httpx.Response(200, json={"items": [], "cursor": 0})
+        return httpx.Response(200, text="LOGIN HOME")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = ev.run_item(client, "http://x", PICTURE, 5)
+    assert len(posts) == 1
+    body = posts[0]
+    pic = _picture_expected()["pictures"][0]
+    assert b'name="region.0.0.png"' in body and pic["id"].encode() in body
+    assert b'"regions"' in body and b'"conversation": "new"' in body
+    assert result["status"] == "done" and result["images_ok"] is False
+
+
+def test_picture_checks():
+    exp = _picture_expected()
+    pic_id = exp["images"][0]
+    ok = ev.picture_checks(f"![image](images/{pic_id}.png)\n", exp)
+    assert ok == {"images_ok": True, "forbidden": []}
+    bad = ev.picture_checks("SHED\n", exp)
+    assert bad == {"images_ok": False, "forbidden": ["shed"]}

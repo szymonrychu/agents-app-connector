@@ -20,6 +20,11 @@ strokes in page px) and, for 13-15, a base page: specs/<item>.png with its own
 layouts/<item>.base.json and strokes/<item>.base.json, and specs/<item>.md, the text the base
 should become (spec v1, one source line per row). The annotated page shows that text printed on
 its rows. 15-image-region also writes regions/15-image-region.0.0.png, the app's crop.
+
+16-picture-and-boxes is a plain page (1568 x 1176, no layout): two labelled boxes joined by an
+arrow and a dashed frame holding a drawn shed. Its expected JSON lists the picture
+(`pictures`: id, rect, part) the runner sends as `meta.pages[0].regions`, and the crop is
+regions/16-picture-and-boxes.0.0.png.
 """
 
 from __future__ import annotations
@@ -124,7 +129,8 @@ class Sheet:
         self.words: list[str] = []
         self.base: Image.Image | None = None  # the page before the notes (annotated item)
         self.base_md = ""
-        self.extra: dict[str, list[str]] = {}  # extra keys of the expected JSON
+        self.extra: dict[str, list] = {}  # extra keys of the expected JSON
+        self.regions: dict[str, Image.Image] = {}  # picture crops by upload part name
         self.min_precision = MIN_PRECISION
 
     def _j(self, amount: float) -> float:
@@ -405,7 +411,6 @@ class NotebookSheet(Sheet):
             "runs": [],
             "ops": [],
         }
-        self.regions: dict[str, Image.Image] = {}
         self.base_sheet: NotebookSheet | None = None
 
     def _stroke(self, pts: list[tuple[float, float]], jitter: float = 1.0) -> None:
@@ -601,6 +606,37 @@ def image_region(rng: random.Random) -> Sheet:
     return s
 
 
+def picture_and_boxes(rng: random.Random) -> Sheet:
+    """A plain page: two labelled boxes joined by an arrow, and below them a dashed frame holding
+    a drawn shed with a label that must not be transcribed (the picture, part region.0.0.png)."""
+    s = Sheet(rng)
+    s.labeled_box(100, 80, 420, 190, "LOGIN")
+    s.arrow((420, 135), (800, 135))
+    s.labeled_box(800, 80, 1120, 190, "HOME")
+    frame = (140.0, 340.0, 800.0, 1060.0)
+    for a, b in (
+        ((frame[0], frame[1]), (frame[2], frame[1])),
+        ((frame[2], frame[1]), (frame[2], frame[3])),
+        ((frame[2], frame[3]), (frame[0], frame[3])),
+        ((frame[0], frame[3]), (frame[0], frame[1])),
+    ):
+        s.dashed(a, b)
+    s.rect(320, 700, 620, 960)
+    s.line((300, 710), (470, 560))
+    s.line((470, 560), (640, 710))
+    s.text(380, 800, "SHED", 44)
+    region_id = _id("16-region")
+    rect = [frame[0], frame[1], frame[2] - frame[0], frame[3] - frame[1]]
+    s.regions["region.0.0.png"] = s.img.crop(tuple(round(v) for v in frame))
+    s.words = ["login", "home"]
+    s.extra = {
+        "must_not": ["shed"],
+        "images": [region_id],
+        "pictures": [{"id": region_id, "rect": rect, "part": "region.0.0.png"}],
+    }
+    return s
+
+
 ITEMS = [
     ("01-notes", notes, None),
     ("02-flowchart", flowchart, "flowchart"),
@@ -617,6 +653,7 @@ ITEMS = [
     ("13-replace-and-strike", replace_and_strike, None),
     ("14-margin-insert", margin_insert, None),
     ("15-image-region", image_region, None),
+    ("16-picture-and-boxes", picture_and_boxes, "flowchart"),
 ]
 
 
@@ -641,6 +678,9 @@ def generate(out: Path) -> None:
             (out / "specs").mkdir(parents=True, exist_ok=True)
             sheet.base.save(out / "specs" / f"{name}.png", "PNG")
             (out / "specs" / f"{name}.md").write_text(sheet.base_md)
+        for part, img in sheet.regions.items():
+            (out / "regions").mkdir(parents=True, exist_ok=True)
+            img.save(out / "regions" / f"{name}.{part.removeprefix('region.')}", "PNG")
         if isinstance(sheet, NotebookSheet):
             _write_notebook(out, name, sheet)
 
@@ -657,9 +697,6 @@ def _strokes_doc(sheet: NotebookSheet) -> dict:
 def _write_notebook(out: Path, name: str, sheet: NotebookSheet) -> None:
     _json(out / "layouts" / f"{name}.json", sheet.layout)
     _json(out / "strokes" / f"{name}.json", _strokes_doc(sheet))
-    for part, img in sheet.regions.items():
-        (out / "regions").mkdir(parents=True, exist_ok=True)
-        img.save(out / "regions" / f"{name}.{part.removeprefix('region.')}", "PNG")
     base = sheet.base_sheet
     if base is not None:
         (out / "specs").mkdir(parents=True, exist_ok=True)

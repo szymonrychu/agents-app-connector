@@ -160,18 +160,24 @@ def _delete_conversation(client: httpx.Client, base: str, conversation: str) -> 
         client.delete(f"{base}/conversations/{conversation}")
 
 
-def _upload(client: httpx.Client, base: str, png: bytes, **meta_extra) -> str:
-    """Upload one single-page sketch; returns the conversation id."""
-    meta = {
-        "client_id": str(uuid.uuid4()),
-        "pages": [{"page": 0, "canvas": {"w": 1568, "h": 1176, "dpi": 300}}],
-        **meta_extra,
-    }
-    up = client.post(
-        f"{base}/sketches",
-        data={"meta": json.dumps(meta)},
-        files={"sketch.0.png": ("sketch.0.png", png, "image/png")},
-    )
+def _upload(
+    client: httpx.Client,
+    base: str,
+    png: bytes,
+    pictures: list[dict] | None = None,
+    regions: dict[str, bytes] | None = None,
+    **meta_extra,
+) -> str:
+    """Upload one single-page sketch, with its picture regions and their crops (by part name)
+    when it has any; returns the conversation id."""
+    page = {"page": 0, "canvas": {"w": 1568, "h": 1176, "dpi": 300}}
+    if pictures:
+        page["regions"] = pictures
+    meta = {"client_id": str(uuid.uuid4()), "pages": [page], **meta_extra}
+    files = {"sketch.0.png": ("sketch.0.png", png, "image/png")}
+    for part, data in (regions or {}).items():
+        files[part] = (part, data, "image/png")
+    up = client.post(f"{base}/sketches", data={"meta": json.dumps(meta)}, files=files)
     up.raise_for_status()
     return up.json()["conversation_id"]
 
@@ -256,9 +262,18 @@ def _spec_json(client: httpx.Client, base: str, conversation: str) -> dict:
     return r.json()
 
 
+def picture_checks(markdown: str, expected: dict) -> dict:
+    """The expected image references present and no forbidden word written."""
+    words = set(_document_words(markdown))
+    return {
+        "images_ok": all(f"images/{i}.png" in markdown for i in expected.get("images", [])),
+        "forbidden": [w for w in expected.get("must_not", []) if w in words],
+    }
+
+
 def notebook_checks(spec: dict, expected: dict) -> dict:
-    """Op statuses as expected, every expected segment id in the line provenance, the expected
-    image references present and no forbidden word written."""
+    """Op statuses as expected, every expected segment id in the line provenance, plus the
+    picture checks."""
     layout = spec.get("layout") or {}
     got_ops = {o["id"]: o["status"] for o in layout.get("ops", [])}
     segments = {
@@ -267,12 +282,10 @@ def notebook_checks(spec: dict, expected: dict) -> dict:
         for s in (line.get("origin") or {}).get("segments", [])
     }
     want_segments = {s for line in expected.get("lines", []) for s in line.get("segments", [])}
-    words = set(_document_words(spec["markdown"]))
     return {
         "ops_ok": all(got_ops.get(o["id"]) == o["status"] for o in expected.get("ops", [])),
         "lines_ok": want_segments <= segments,
-        "images_ok": all(f"images/{i}.png" in spec["markdown"] for i in expected.get("images", [])),
-        "forbidden": [w for w in expected.get("must_not", []) if w in words],
+        **picture_checks(spec["markdown"], expected),
     }
 
 
@@ -359,10 +372,16 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
             )
             runs = 2
         else:
-            conversation = _upload(client, base, png, conversation="new")
+            pictures = expected.get("pictures", [])
+            regions = {
+                "region." + path.name.removeprefix(f"{name}."): path.read_bytes()
+                for path in sorted((EVAL / "regions").glob(f"{name}.*.png"))
+            }
+            conversation = _upload(client, base, png, pictures, regions, conversation="new")
         result["status"] = _wait_done(client, base, conversation, timeout, runs)
         if result["status"] == "done":
-            sc = score(_spec_md(client, base, conversation), expected)
+            md = _spec_md(client, base, conversation)
+            sc = score(md, expected)
             result.update(
                 recall=round(sc.recall, 3),
                 precision=round(sc.precision, 3),
@@ -377,6 +396,8 @@ def run_item(client: httpx.Client, base: str, name: str, timeout: float) -> dict
             )
             if notebook:
                 result.update(notebook_checks(_spec_json(client, base, conversation), expected))
+            elif expected.get("pictures"):
+                result.update(picture_checks(md, expected))
     except httpx.HTTPError as exc:
         result["error"] = type(exc).__name__
     finally:

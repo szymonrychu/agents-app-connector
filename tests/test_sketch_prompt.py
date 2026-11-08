@@ -428,3 +428,23 @@ def test_pictures_listed_under_their_own_page():
 
 def test_plain_prompt_without_pictures_has_no_picture_line():
     assert "Picture " not in PLUGIN.render_prompt(make_turn())
+
+
+def test_system_append_box_is_a_mermaid_node_with_its_label():
+    text = _system_append()
+    assert "handwriting inside it is the node's label" in text
+    assert "Arrows between rectangles are edges, from tail to tip" in text
+
+
+def test_system_append_lone_box_is_a_one_node_flowchart():
+    text = _system_append()
+    assert "one-node mermaid flowchart" in text
+    assert "boxed title" not in text
+
+
+def test_system_append_picture_is_an_embedded_image():
+    text = _system_append()
+    assert "image_region" in text
+    assert "Picture <id> at rect" in text
+    assert "![image](images/<id>.png)" in text
+    assert "transcribe nothing inside its rect" in text

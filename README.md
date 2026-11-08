@@ -85,12 +85,12 @@ Notebook pages add, per page index `i`, an optional `layout.<i>.json` (at most
 `APPCONN_MAX_LAYOUT_BYTES`) and the `region.<i>.<k>.png` parts its image ops name (k below
 `APPCONN_MAX_REGIONS_PER_PAGE`). A layout is `{version: 1, geometry: {cell, row_pitch, top, rows,
 text_left, margin_left}, segments: [{id: "p<page>-r<row>-<n>", row, x0, x1, strokes}], runs:
-[{line_id, row, x0}], ops: [{id, kind: replace|delete|insert|image, target?: {line_id, from, to,
+[{line_id, row, x0}], ops: [{id, kind: replace|delete|insert|image|note, target?: {line_id, from, to,
 quote}, at?: {line_id, offset, mode: inline|after_line}, strokes, rect?: [x, y, w, h], region?:
 {id, part, after_line}}]}` (unknown keys are 422). Stroke indices refer to `strokes.<i>.json` (no
 strokes part allows none), segments, runs and rects lie inside the page canvas, op and region ids
 are unique, every region part is named by exactly one image op of its page and every named part is
-present (422 `invalid_request`). `meta.base_version` (needs `conversation_id`, excludes
+present (422 `invalid_request`). A `note` op needs only `rect` and a non-empty `strokes` (no target): margin ink that is not part of another op, applied by the translator to the line its arrow points at or the nearest lines, and reported applied or rejected like any op. `meta.base_version` (needs `conversation_id`, excludes
 `annotates`) is the spec version whose text the board showed and is required when any layout has
 ops: 409 `stale_base` when it is not the latest version, 409 `op_replayed` when an op id was
 already reported by a stored version, 422 `invalid_request` for a line id that is not in that

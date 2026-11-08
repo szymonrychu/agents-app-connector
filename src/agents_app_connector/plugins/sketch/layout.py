@@ -101,12 +101,13 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "delete": ("target",),
     "insert": ("at", "rect"),
     "image": ("region", "rect"),
+    "note": ("rect",),
 }
 
 
 class EditOp(_Strict):
     id: uuid.UUID
-    kind: Literal["replace", "delete", "insert", "image"]
+    kind: Literal["replace", "delete", "insert", "image", "note"]
     target: OpTarget | None = None
     at: OpAt | None = None
     strokes: list[int] = []
@@ -118,6 +119,8 @@ class EditOp(_Strict):
         missing = [name for name in REQUIRED[self.kind] if getattr(self, name) is None]
         if missing:
             raise ValueError(f"a {self.kind} op needs {' and '.join(missing)}")
+        if self.kind == "note" and not self.strokes:
+            raise ValueError("a note op needs strokes")
         return self
 
 

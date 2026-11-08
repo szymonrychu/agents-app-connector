@@ -237,6 +237,28 @@ async def test_replayed_op_id_409_op_replayed(device_api, token, conn):
     err(await send(device_api, token, cid, layout(ops=[op]), base=2), 409, "op_replayed")
 
 
+def note_op():
+    return {"id": str(uuid.uuid4()), "kind": "note", "rect": [990, 300, 200, 90], "strokes": [0]}
+
+
+async def test_note_op_accepted_without_target(device_api, token, conn):
+    cid = await conv_with_base(device_api, token, conn)
+    r = await send(device_api, token, cid, layout(ops=[note_op()]))
+    assert r.status_code == 202
+
+
+async def test_note_op_id_replayed_after_status_report(device_api, token, conn):
+    cid = await conv_with_base(device_api, token, conn)
+    op = note_op()
+    reported = {
+        **BASE_LAYOUT,
+        "ops": [{"id": op["id"], "status": "rejected", "note": "no line"}],
+        "base_version": 1,
+    }
+    await specs.add(conn, uuid.UUID(cid), BASE, None, [], None, layout=reported)
+    err(await send(device_api, token, cid, layout(ops=[op]), base=2), 409, "op_replayed")
+
+
 async def test_duplicate_op_ids_422(device_api, token, conn):
     cid = await conv_with_base(device_api, token, conn)
     op = strike()

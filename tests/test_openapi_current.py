@@ -127,6 +127,7 @@ def test_upload_documents_layout_and_region_parts():
         "delete",
         "insert",
         "image",
+        "note",
     ]
 
 

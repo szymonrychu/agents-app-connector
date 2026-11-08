@@ -1,5 +1,6 @@
 """Request and response models of the admin API."""
 
+import math
 import uuid
 from datetime import datetime
 from typing import Literal
@@ -60,13 +61,34 @@ class Canvas(BaseModel):
     dpi: float = Field(gt=0, le=10000, allow_inf_nan=False)
 
 
+REGION_PART = r"^region\.[0-9]+\.[0-9]+\.png$"
+
+
+class PictureRegion(BaseModel):
+    """A freehand picture of a page: embedded as `![image](images/<id>.png)` from its PNG part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    rect: tuple[float, float, float, float]
+    part: str = Field(pattern=REGION_PART)
+
+    @model_validator(mode="after")
+    def _rect_valid(self):
+        x, y, w, h = self.rect
+        if not all(math.isfinite(v) for v in self.rect) or w <= 0 or h <= 0 or x < 0 or y < 0:
+            raise ValueError("rect must be finite [x, y, w, h] with x, y >= 0 and w, h > 0")
+        return self
+
+
 class PageMeta(BaseModel):
-    """One page of a sketch upload: its index and its canvas."""
+    """One page of a sketch upload: its index, its canvas and its picture regions."""
 
     model_config = ConfigDict(extra="forbid")
 
     page: int = Field(ge=0, strict=True)
     canvas: Canvas
+    regions: list[PictureRegion] = []
 
 
 class AnnotatedPage(BaseModel):

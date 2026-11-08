@@ -17,13 +17,12 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agents_app_connector.api.errors import ApiError
-from agents_app_connector.api.schemas import Canvas
+from agents_app_connector.api.schemas import REGION_PART, Canvas
 from agents_app_connector.db import attachments
 from agents_app_connector.storage import AttachmentStore
 
 LINE_ID = r"^L[0-9]+$"
 SEGMENT_ID = r"^p[0-9]+-r[0-9]+-[0-9]+$"
-REGION_PART = r"^region\.[0-9]+\.[0-9]+\.png$"
 
 Rect = tuple[float, float, float, float]
 

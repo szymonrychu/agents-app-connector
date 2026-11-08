@@ -58,6 +58,7 @@ from agents_app_connector.plugins import (
     REGISTRY,
     AnnotatedPage,
     NotebookPage,
+    Picture,
     TurnFile,
     TurnInput,
 )
@@ -329,6 +330,7 @@ class Worker:
             annotated_pages=annotated_pages,
             layouts=layouts,
             base=base,
+            pictures=_pictures(source),
         )
         text = plugin.render_prompt(turn)
         if missing and MISSING_FILE not in text:
@@ -379,4 +381,13 @@ def _notebook_pages(row: InboundRow, files: list[TurnFile]) -> list[NotebookPage
         NotebookPage(f.page or 0, PageLayout.model_validate_json(f.data), widths[f.page or 0])
         for f in files
         if f.kind == "sketch_layout"
+    ]
+
+
+def _pictures(source: InboundRow) -> list[Picture]:
+    """The picture regions of an upload's meta, in page and meta order (absent key: none)."""
+    return [
+        Picture(page["page"], uuid.UUID(pic["id"]), tuple(pic["rect"]))
+        for page in source.meta.get("pages", [])
+        for pic in page.get("regions", [])
     ]

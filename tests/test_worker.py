@@ -483,3 +483,24 @@ async def test_turn_input_carries_layouts_and_base(worker, fake, device_api, tok
     await worker.tick()
     follow = fake.messages[max(fake.messages)]["text"]
     assert "Line ids of spec version 1" in follow and "Notebook geometry" in follow
+
+
+async def test_turn_input_carries_pictures_from_meta(worker, fake, device_api, token):
+    import uuid as _uuid
+
+    from helpers import CANVAS, files, meta, post, region_png
+
+    pid = str(_uuid.uuid4())
+    pg = [
+        {
+            "page": 0,
+            "canvas": CANVAS,
+            "regions": [{"id": pid, "rect": [60, 60, 300, 200], "part": "region.0.0.png"}],
+        }
+    ]
+    r = await post(device_api, token, meta(pages=pg), files(regions={(0, 0): region_png()}))
+    assert r.status_code == 202, r.text
+    await worker.tick()
+    msg = only(fake.messages.values())
+    assert f"Picture {pid} at rect 60,60,300,200" in msg["text"]
+    assert len(msg["attachments"]) == 1

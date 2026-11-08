@@ -84,6 +84,13 @@ def _op_line(op: "EditOp") -> str:
     )
 
 
+def _picture_line(pic) -> str:
+    return (
+        f"Picture {pic.id} at {_rect(pic.rect)}: write ![image](images/{pic.id}.png) "
+        "at its place, transcribe nothing inside"
+    )
+
+
 def _notebook_lines(page: "NotebookPage", base: "tuple[int, str, SpecLayout] | None") -> list[str]:
     g = page.layout.geometry
     out = [
@@ -130,6 +137,9 @@ class SketchPlugin:
             else:
                 notes = {p.page: p for p in turn.annotated_pages}
                 notebook = {p.page: p for p in turn.layouts}
+                pictures: dict[int, list] = {}
+                for pic in turn.pictures:
+                    pictures.setdefault(pic.page, []).append(pic)
                 lines = []
                 for i, f in enumerate(pngs, 1):
                     page = f.page or 0
@@ -139,6 +149,7 @@ class SketchPlugin:
                     )
                     if page in notebook:
                         lines += _notebook_lines(notebook[page], turn.base)
+                    lines += [_picture_line(pic) for pic in pictures.get(page, [])]
                 parts.append("\n".join(lines))
                 if len(pngs) > 1 and annotated is None:
                     parts.append("The images are pages of one sketch; treat them together.")

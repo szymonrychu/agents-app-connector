@@ -375,3 +375,162 @@ async def test_annotated_upload_to_other_device_conversation_404_not_found(devic
     foreign = await _conv_with_spec(device_api, other, conn)
     r = await post(device_api, token, meta(conversation_id=foreign, annotates=_annotates(1)))
     assert r.status_code == 404 and r.json()["error"] == "not_found"
+
+
+# ---- picture regions on any page (contract 2.3.0) ----
+
+
+def pic(part="region.0.0.png", rect=(60, 60, 300, 200), id=None):
+    return {"id": str(id or uuid.uuid4()), "rect": list(rect), "part": part}
+
+
+def pic_meta(*page_pictures, **over):
+    pgs = [{"page": i, "canvas": CANVAS, "regions": p} for i, p in enumerate(page_pictures)]
+    return meta(pages=pgs, **over)
+
+
+async def test_plain_upload_with_pictures_stores_spec_images(device_api, token, conn):
+    from helpers import region_png, rows
+
+    p = pic()
+    r = await post(device_api, token, pic_meta([p]), files(regions={(0, 0): region_png()}))
+    assert r.status_code == 202, r.text
+    cid = r.json()["conversation_id"]
+    from agents_app_connector.db import spec_images
+
+    assert await spec_images.get(conn, uuid.UUID(cid), uuid.UUID(p["id"])) is not None
+    (row,) = await rows(conn, "SELECT kind, expires_at FROM attachments WHERE kind = 'spec_image'")
+    assert row[0] == "spec_image" and row[1] is None
+
+
+async def test_picture_served_by_images_route(device_api, token, conn):
+    from helpers import bearer, region_png
+
+    p = pic()
+    data = region_png()
+    r = await post(device_api, token, pic_meta([p]), files(regions={(0, 0): data}))
+    cid = r.json()["conversation_id"]
+    got = await device_api.get(f"/conversations/{cid}/images/{p['id']}.png", headers=bearer(token))
+    assert got.status_code == 200
+    assert got.headers["content-type"] == "image/png"
+    assert got.content == data
+
+
+def _err(r, text):
+    assert r.status_code == 422, r.text
+    assert r.json()["error"] == "invalid_request", r.text
+    assert text in r.json()["detail"], r.json()["detail"]
+
+
+async def test_plain_page_picture_cap_422(make_app, token, conn):
+    from helpers import region_png
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=make_app(max_regions_per_page=1)),
+        base_url="http://dev" + PREFIX,
+    ) as api:
+        m = pic_meta([pic(), pic("region.0.1.png")])
+        r = await post(api, token, m, files(regions={(0, 0): region_png(), (0, 1): region_png()}))
+    _err(r, "at most 1 region")
+
+
+async def test_unreferenced_region_part_on_plain_page_422(device_api, token, conn, store):
+    from helpers import region_png
+
+    r = await post(device_api, token, meta(), files(regions={(0, 0): region_png()}))
+    _err(r, "region.0.0.png: no image op or picture names it")
+    assert stored_files(store) == []
+
+
+async def test_picture_named_but_part_missing_422(device_api, token, conn):
+    r = await post(device_api, token, pic_meta([pic()]), files())
+    _err(r, "region.0.0.png is named but missing")
+
+
+async def test_picture_part_of_another_page_422(device_api, token, conn):
+    from helpers import region_png
+
+    m = pic_meta([pic("region.1.0.png")], [])
+    r = await post(device_api, token, m, files(count=2, regions={(1, 0): region_png()}))
+    _err(r, "is not a part of page 0")
+
+
+async def test_picture_rect_outside_canvas_422(device_api, token, conn):
+    from helpers import region_png
+
+    p = pic(rect=(0, 0, CANVAS["w"] + 1, 10))
+    r = await post(device_api, token, pic_meta([p]), files(regions={(0, 0): region_png()}))
+    _err(r, "rect outside the canvas")
+
+
+async def test_part_named_by_op_and_picture_422(device_api, token, conn):
+    from helpers import region_png
+    from test_api_sketches_layout import conv_with_base, image_op, nb_files
+
+    cid = await conv_with_base(device_api, token, conn)
+    from helpers import NOTEBOOK_CANVAS, layout
+
+    p = pic()
+    m = json.dumps(
+        {
+            "client_id": str(uuid.uuid4()),
+            "conversation_id": cid,
+            "base_version": 1,
+            "pages": [{"page": 0, "canvas": NOTEBOOK_CANVAS, "regions": [p]}],
+        }
+    )
+    fl = nb_files(layout(ops=[image_op()]), regions={(0, 0): region_png()})
+    r = await post(device_api, token, m, fl)
+    _err(r, "is named twice")
+
+
+async def test_duplicate_picture_id_422(device_api, token, conn):
+    from helpers import region_png
+
+    i = uuid.uuid4()
+    m = pic_meta([pic(id=i), pic("region.0.1.png", id=i)])
+    r = await post(
+        device_api, token, m, files(regions={(0, 0): region_png(), (0, 1): region_png()})
+    )
+    _err(r, "duplicate op or region id")
+
+
+async def test_pictures_with_a_segment_layout_and_no_base_accepted(device_api, token, conn):
+    from helpers import NOTEBOOK_CANVAS, layout, region_png
+    from test_api_sketches_layout import nb_files
+
+    seg = {"id": "p0-r0-0", "row": 0, "x0": 60, "x1": 400, "strokes": [0, 1, 2]}
+    m = json.dumps(
+        {
+            "client_id": str(uuid.uuid4()),
+            "pages": [{"page": 0, "canvas": NOTEBOOK_CANVAS, "regions": [pic()]}],
+        }
+    )
+    fl = nb_files(layout(segments=[seg]), strokes=3, regions={(0, 0): region_png()})
+    r = await post(device_api, token, m, fl)
+    assert r.status_code == 202, r.text
+
+
+async def test_plain_upload_fingerprint_has_no_regions_key(device_api, token, conn):
+    from helpers import rows
+
+    m = meta()
+    r = await post(device_api, token, m)
+    assert r.status_code == 202
+    (row,) = await rows(conn, "SELECT meta FROM inbound")
+    assert "regions" not in row[0]["pages"][0]
+    again = await post(device_api, token, m)
+    assert again.status_code == 200
+
+
+async def test_pictures_are_part_of_the_fingerprint(device_api, token, conn):
+    from helpers import region_png
+
+    cid = str(uuid.uuid4())
+    p = pic()
+    fl = files(regions={(0, 0): region_png()})
+    r = await post(device_api, token, pic_meta([p], client_id=cid), fl)
+    assert r.status_code == 202, r.text
+    moved = {**p, "rect": [70, 60, 300, 200]}
+    r = await post(device_api, token, pic_meta([moved], client_id=cid), fl)
+    assert r.status_code == 422 and r.json()["error"] == "idempotency_mismatch", r.text

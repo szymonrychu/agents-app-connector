@@ -392,3 +392,59 @@ def test_system_append_has_notebook_pages_section():
     ):
         assert word in section, word
     assert text.isascii()
+
+
+def _pic_line(pic):
+    return (
+        f"Picture {pic.id} at rect 60,600,400,300: write ![image](images/{pic.id}.png) "
+        "at its place, transcribe nothing inside"
+    )
+
+
+def test_plain_prompt_lists_pictures_under_the_image():
+    from agents_app_connector.plugins import Picture
+
+    pic = Picture(0, uuid4(), (60.4, 600, 400, 300))
+    t = make_turn(pictures=[pic])
+    aid = t.files[0].attachment_id
+    p = PLUGIN.render_prompt(t)
+    assert f"Image 1: sketch-{aid}.png (page 0)\n{_pic_line(pic)}" in p
+
+
+def test_pictures_listed_under_their_own_page():
+    from agents_app_connector.plugins import Picture
+
+    pic = Picture(1, uuid4(), (60.4, 600, 400, 300))
+    files = _page_files(0, 1)
+    p = PLUGIN.render_prompt(make_turn(files=files, pictures=[pic]))
+    line = _pic_line(pic)
+    assert p.index("Image 2:") < p.index(line)
+    assert p.index(line) < p.index("The images are pages of one sketch")
+    assert p.index("Image 1:") < p.index("Image 2:")
+    assert p.count(line) == 1
+    first = p[: p.index("Image 2:")]
+    assert "Picture " not in first
+
+
+def test_plain_prompt_without_pictures_has_no_picture_line():
+    assert "Picture " not in PLUGIN.render_prompt(make_turn())
+
+
+def test_system_append_box_is_a_mermaid_node_with_its_label():
+    text = _system_append()
+    assert "handwriting inside it is the node's label" in text
+    assert "Arrows between rectangles are edges, from tail to tip" in text
+
+
+def test_system_append_lone_box_is_a_one_node_flowchart():
+    text = _system_append()
+    assert "one-node mermaid flowchart" in text
+    assert "boxed title" not in text
+
+
+def test_system_append_picture_is_an_embedded_image():
+    text = _system_append()
+    assert "image_region" in text
+    assert "Picture <id> at rect" in text
+    assert "![image](images/<id>.png)" in text
+    assert "transcribe nothing inside its rect" in text

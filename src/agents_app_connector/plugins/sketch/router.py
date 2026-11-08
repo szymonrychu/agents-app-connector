@@ -190,8 +190,6 @@ async def _validate_parts(
         i: layout.parse_layout(raw, index=i, max_bytes=settings.max_layout_bytes)
         for i, raw in sorted(parts.layouts.items())
     }
-    for i in sorted({p for p, _ in parts.regions} - set(layouts)):
-        raise ApiError(422, "invalid_request", f"{region_field(i, 0)}: no layout of page {i}")
     for i, lay in layouts.items():
         doc = docs[i]
         layout.check_layout(
@@ -199,9 +197,9 @@ async def _validate_parts(
             index=i,
             strokes_count=None if doc is None else len(doc["strokes"]),
             canvas=meta.pages[i].canvas,
-            region_parts={region_field(p, k) for p, k in parts.regions if p == i},
         )
-    layout.check_unique_ops(layouts.values())
+    layout.check_region_parts(meta, layouts, set(parts.regions))
+    layout.check_unique_ops(layouts.values(), (pic for pg in meta.pages for pic in pg.regions))
     if meta.base_version is None and any(lay.ops for lay in layouts.values()):
         raise ApiError(422, "invalid_request", "meta.base_version: required when a layout has ops")
     sizes: dict = dict(enumerate(page_sizes))
@@ -263,7 +261,7 @@ def _stored_parts(
         for lay in layouts.values()
         for op in lay.ops
         if op.region is not None
-    }
+    } | {pic.part: pic.id for pg in meta.pages for pic in pg.regions}
     out: list[_Stored] = []
     for i, page_meta in enumerate(meta.pages):
         page = page_meta.page
@@ -338,6 +336,9 @@ def build_router(deps: PluginDeps) -> APIRouter:
         meta_dict = meta.model_dump(mode="json")
         if meta.base_version is None:
             meta_dict.pop("base_version")  # plain uploads keep their fingerprint
+        for page in meta_dict["pages"]:
+            if not page["regions"]:
+                page.pop("regions")  # likewise: an upload without pictures replays across deploys
         fp = inbound.fingerprint(meta_dict, [_sha(d) for d in parts.in_field_order()])
         written: list[str] = []
         replaced: list[str] = []

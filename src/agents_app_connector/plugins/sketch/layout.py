@@ -17,13 +17,12 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agents_app_connector.api.errors import ApiError
-from agents_app_connector.api.schemas import Canvas
+from agents_app_connector.api.schemas import REGION_PART, Canvas, PictureRegion, SketchMeta
 from agents_app_connector.db import attachments
 from agents_app_connector.storage import AttachmentStore
 
 LINE_ID = r"^L[0-9]+$"
 SEGMENT_ID = r"^p[0-9]+-r[0-9]+-[0-9]+$"
-REGION_PART = r"^region\.[0-9]+\.[0-9]+\.png$"
 
 Rect = tuple[float, float, float, float]
 
@@ -181,10 +180,9 @@ def check_layout(
     index: int,
     strokes_count: int | None,
     canvas: Canvas,
-    region_parts: set[str],
 ) -> None:
     """Stroke indices within that page's strokes part (none without one), segments and rects
-    inside the canvas, and region parts of this page exactly the ones its image ops name."""
+    inside the canvas."""
     limit = strokes_count or 0
     for name, strokes in [(s.id, s.strokes) for s in layout.segments] + [
         (f"op {o.id}", o.strokes) for o in layout.ops
@@ -201,23 +199,55 @@ def check_layout(
     for op in layout.ops:
         if op.rect is not None and not _inside(op.rect, canvas):
             raise _invalid(index, f"op {op.id}: rect outside the canvas")
-    named = {op.region.part for op in layout.ops if op.region is not None}
-    for part in sorted(named - region_parts):
-        raise _invalid(index, f"{part} is named by an image op but missing")
-    for part in sorted(region_parts - named):
-        raise ApiError(422, "invalid_request", f"{part}: no image op names it")
 
 
-def check_unique_ops(layouts: Iterable[PageLayout]) -> None:
-    """Op ids and region ids are unique across the upload."""
+def check_region_parts(
+    meta: SketchMeta, layouts: dict[int, PageLayout], region_parts: set[tuple[int, int]]
+) -> None:
+    """Per page position i, the region parts present are exactly the ones the image ops of its
+    layout and the pictures of its meta name, each named once (422 `invalid_request`)."""
+    for i, page in enumerate(meta.pages):
+        lay = layouts.get(i)
+        named = [op.region.part for op in lay.ops if op.region is not None] if lay else []
+        for pic in page.regions:
+            if not re.fullmatch(rf"region\.{i}\.[0-9]+\.png", pic.part):
+                raise ApiError(
+                    422,
+                    "invalid_request",
+                    f"meta.pages[{i}].regions: {pic.part} is not a part of page {i}",
+                )
+            if not _inside(pic.rect, page.canvas):
+                raise ApiError(
+                    422,
+                    "invalid_request",
+                    f"meta.pages[{i}].regions: {pic.id}: rect outside the canvas",
+                )
+            named.append(pic.part)
+        present = {region_field(p, k) for p, k in region_parts if p == i}
+        for part in sorted(set(named) - present):
+            raise ApiError(422, "invalid_request", f"{part} is named but missing")
+        for part in sorted(present - set(named)):
+            raise ApiError(422, "invalid_request", f"{part}: no image op or picture names it")
+        for part in sorted({n for n in named if named.count(n) > 1}):
+            raise ApiError(422, "invalid_request", f"{part} is named twice")
+
+
+def check_unique_ops(layouts: Iterable[PageLayout], pictures: Iterable[PictureRegion] = ()) -> None:
+    """Op ids, op region ids and picture ids are unique across the upload."""
     seen: set[uuid.UUID] = set()
+
+    def add(item: uuid.UUID) -> None:
+        if item in seen:
+            raise ApiError(422, "invalid_request", f"duplicate op or region id {item}")
+        seen.add(item)
+
     for lay in layouts:
         for op in lay.ops:
-            ids = [op.id] + ([op.region.id] if op.region is not None else [])
-            for item in ids:
-                if item in seen:
-                    raise ApiError(422, "invalid_request", f"duplicate op or region id {item}")
-                seen.add(item)
+            add(op.id)
+            if op.region is not None:
+                add(op.region.id)
+    for pic in pictures:
+        add(pic.id)
 
 
 def check_base(layouts: dict[int, PageLayout], base_markdown: str, base: SpecLayout | None) -> None:

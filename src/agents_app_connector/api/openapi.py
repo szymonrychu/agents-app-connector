@@ -18,6 +18,7 @@ from fastapi.routing import APIRoute
 
 from agents_app_connector.api.admin import create_admin_app
 from agents_app_connector.api.device import create_device_app
+from agents_app_connector.api.schemas import PictureRegion
 from agents_app_connector.plugins import REGISTRY
 from agents_app_connector.plugins.sketch.layout import PageLayout, SpecLayout
 from agents_app_connector.settings import Settings
@@ -416,7 +417,8 @@ EXTRA_SCHEMAS: dict[str, Any] = {
                 "description": (
                     'JSON: {"client_id": uuid, "conversation": "current"|"new", '
                     '"conversation_id"?: uuid, "caption"?: string, "pages": [{"page": int, '
-                    '"canvas": {"w", "h", "dpi"}}], "annotates"?: {"spec_version": int >= 1, '
+                    '"canvas": {"w", "h", "dpi"}, "regions"?: [{"id": uuid, "rect": [x, y, w, h], '
+                    '"part": "region.<i>.<k>.png"}]}], "annotates"?: {"spec_version": int >= 1, '
                     '"pages": [{"page": int, "doc_page": int, "lines": [int, int]}]}}. '
                     "annotates needs conversation_id and answers 404 no_spec when that spec "
                     "version does not exist. Part i (sketch.<i>.png, strokes.<i>.json) "
@@ -424,7 +426,9 @@ EXTRA_SCHEMAS: dict[str, Any] = {
                     '"base_version"?: int >= 1 is the spec version whose text the board '
                     "showed; it needs conversation_id, excludes annotates, is required when any "
                     "layout carries ops, and answers 409 stale_base when it is not the latest "
-                    "version."
+                    'version. Each page may carry "regions" (PictureRegion): pictures of '
+                    "pages[i] embedded as ![image](images/<id>.png), allowed with or without "
+                    "a layout."
                 ),
             },
             "sketch.0.png": {"type": "string", "format": "binary"},
@@ -445,11 +449,11 @@ EXTRA_SCHEMAS: dict[str, Any] = {
                 "type": "string",
                 "format": "binary",
                 "description": (
-                    "region.<i>.<k>.png: the PNG an image op of pages[i] names in region.part "
-                    "(k < APPCONN_MAX_REGIONS_PER_PAGE). Every region part must be referenced "
-                    "and every referenced part present. Stored for the conversation's lifetime "
-                    "and served by the images route; counts toward the upload size and the "
-                    "device quota."
+                    "region.<i>.<k>.png: the PNG named by exactly one image op of pages[i] or "
+                    "one entry of pages[i].regions (k < APPCONN_MAX_REGIONS_PER_PAGE). Every "
+                    "region part must be named and every named part present. Stored for the "
+                    "conversation's lifetime and served by the images route; counts toward the "
+                    "upload size and the device quota."
                 ),
             },
         },
@@ -537,7 +541,7 @@ SUMMARIES = {
 def _model_schemas() -> dict[str, Any]:
     """Schemas of the notebook wire models, with their nested models as components."""
     out: dict[str, Any] = {}
-    for model in (PageLayout, SpecLayout):
+    for model in (PageLayout, SpecLayout, PictureRegion):
         schema = model.model_json_schema(ref_template="#/components/schemas/{model}", by_alias=True)
         out.update(schema.pop("$defs", {}))
         out[model.__name__] = schema

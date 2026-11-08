@@ -58,6 +58,15 @@ class NotebookPage:
 
 
 @dataclass(frozen=True)
+class Picture:
+    """A freehand picture of an uploaded page, embedded from its stored image."""
+
+    page: int
+    id: UUID
+    rect: tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
 class TurnInput:
     kind: Literal["sketch", "message"]
     first: bool
@@ -71,6 +80,7 @@ class TurnInput:
     annotated_pages: Sequence[AnnotatedPage] = ()
     layouts: Sequence[NotebookPage] = ()
     base: tuple[int, str, SpecLayout] | None = None
+    pictures: Sequence[Picture] = ()
 
 
 class ClientPlugin(Protocol):

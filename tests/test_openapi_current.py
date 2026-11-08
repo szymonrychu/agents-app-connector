@@ -156,3 +156,12 @@ def test_notebook_routes_documented():
     assert "stale_base" in revert["responses"]["409"]["description"]
     body = revert["requestBody"]["content"]["application/json"]["schema"]
     assert body == {"$ref": "#/components/schemas/RevertIn"}
+
+
+def test_upload_documents_picture_regions():
+    doc = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    schemas = doc["components"]["schemas"]
+    assert set(schemas["PictureRegion"]["properties"]) == {"id", "rect", "part"}
+    upload = schemas["SketchUpload"]
+    assert '"regions"?' in upload["properties"]["meta"]["description"]
+    assert "pages[i].regions" in upload["properties"]["region.0.0.png"]["description"]

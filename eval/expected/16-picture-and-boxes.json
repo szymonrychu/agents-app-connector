@@ -1,0 +1,27 @@
+{
+  "words": [
+    "login",
+    "home"
+  ],
+  "diagram": "flowchart",
+  "min_word_recall": 0.8,
+  "min_precision": 0.9,
+  "must_not": [
+    "shed"
+  ],
+  "images": [
+    "8af1e694-edec-51cd-8860-3cdd64eea0f5"
+  ],
+  "pictures": [
+    {
+      "id": "8af1e694-edec-51cd-8860-3cdd64eea0f5",
+      "rect": [
+        140.0,
+        340.0,
+        660.0,
+        720.0
+      ],
+      "part": "region.0.0.png"
+    }
+  ]
+}

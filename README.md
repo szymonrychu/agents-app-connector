@@ -100,6 +100,17 @@ conversation's lifetime (never purged, deleted with the conversation), count tow
 size and the device quota, and are served by the images route. Layout and region parts are part
 of the idempotency fingerprint; neither is attached to the translator message.
 
+Pictures (contract 2.3.0) work on any page, with or without a layout: a page's meta may carry
+`regions: [{id, rect: [x, y, w, h], part: "region.<i>.<k>.png"}]` and the upload the named
+`region.<i>.<k>.png` parts. They are stored like op regions (spec images), listed in the
+translator message as "Picture <id> at rect ..." and embedded by the translator as
+`![image](images/<id>.png)`. Each part is named by exactly one image op or picture of its page, and
+a picture's part belongs to its own page and its rect lies inside the canvas (422
+`invalid_request`: `... is not a part of page i`, `... rect outside the canvas`, `<part> is named
+but missing`, `<part>: no image op or picture names it`, `<part> is named twice`); picture ids and
+op ids share one uniqueness check. The idempotency fingerprint omits an empty `regions`, so a plain
+upload keeps its fingerprint.
+
 ### `GET /app/v1/sketch/conversations`
 
 The device's conversations: `[{id, title, created_at, latest_spec_version,

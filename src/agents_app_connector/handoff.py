@@ -200,12 +200,19 @@ class Handoffs:
                     text,
                     marker,
                     attachments=files or None,
+                    from_user=True,
                 )
                 if delivered is None:
                     await self._runs.finish(run.id, "failed", SESSION_GONE)
             else:
                 await agent_runs.dispatch(
-                    self._orchestrator, self._runs, ref, text, marker, attachments=files or None
+                    self._orchestrator,
+                    self._runs,
+                    ref,
+                    text,
+                    marker,
+                    attachments=files or None,
+                    from_user=True,
                 )
         except UsageQuotaRefused:
             await self._runs.finish(run.id, "failed", USAGE_QUOTA)

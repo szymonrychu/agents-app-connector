@@ -59,6 +59,16 @@ async def test_translating_event_emitted(worker, upload, say, conn):
     assert evs[1] == ("message", {"message_id": message_id, "status": "translating"})
 
 
+async def test_translator_turn_is_not_from_user(worker, fake, upload, pool):
+    await upload()
+    await worker.tick()
+    await finish_all(pool)
+    await upload()
+    await worker.tick()
+    first, second = list(fake.messages.values())
+    assert first["from_user"] is None and second["from_user"] is None
+
+
 async def test_second_sketch_follows_same_session(worker, fake, upload, pool, conn):
     await upload()
     await worker.tick()

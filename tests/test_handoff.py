@@ -119,6 +119,27 @@ async def test_handoff_to_preset_creates_session(
     assert await rows(conn, "SELECT status, session_slug FROM handoffs") == [("handled", slug)]
 
 
+async def test_handoff_to_session_is_from_user(api, token, conv, pool, worker, fake, preset):
+    await add_spec(pool, conv)
+    sid = target_session(fake, preset)
+    assert (await handoff(api, token, conv, "review-1")).status_code == 202
+    await worker.tick()
+    (msg,) = [m for m in fake.messages.values() if m["session_id"] == sid]
+    assert msg["from_user"] is True
+
+
+async def test_handoff_new_session_is_from_user(
+    api, token, conv, pool, worker, fake, target_preset
+):
+    await add_spec(pool, conv)
+    resp = await handoff(api, token, conv, {"preset": "review-agent"})
+    assert resp.status_code == 202, resp.text
+    await worker.tick()
+    session = only(s for s in fake.sessions.values() if s["slug"] == resp.json()["session_slug"])
+    (msg,) = [m for m in fake.messages.values() if m["session_id"] == session["id"]]
+    assert msg["from_user"] is True
+
+
 async def test_handoff_without_spec_409(api, token, conv, fake, preset):
     target_session(fake, preset)
     resp = await handoff(api, token, conv, "review-1")
